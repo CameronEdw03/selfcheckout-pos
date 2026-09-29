@@ -1,56 +1,40 @@
-from connection import create_connection
-from user import get_user
+from fastapi import FastAPI
+from cart import add_to_cart, get_cart, remove_from_cart
+from user import get_user, get_student
+from catalog import get_all_products
 
 
-def get_all_users():
-    connection = create_connection()
-
-    if connection:
-        cursor = connection.cursor(dictionary=True)
-
-        cursor.execute("SELECT * FROM users")
-
-        users = cursor.fetchall()
-
-        cursor.close()
-        connection.close()
-
-        return users
-
-    return []
+app = FastAPI()
 
 
-def get_all_products():
-    connection = create_connection()
-
-    if connection:
-        cursor = connection.cursor(dictionary=True)
-
-        cursor.execute("SELECT * FROM products")
-
-        products = cursor.fetchall()
-
-        cursor.close()
-        connection.close()
-
-        return products
-
-    return []
+@app.get("/products")
+def products():
+    return get_all_products()
 
 
-print("USERS")
-print("--------------------")
-
-users = get_all_users()
-
-for user in users:
-    print(user)
+@app.get("/user")
+def user(username: str):
+    return get_user(username)
 
 
-print("\nPRODUCTS")
-print("--------------------")
+@app.get("/student{student_id}")
+def student(student_id: str):
+    return get_student(student_id)
 
-products = get_all_products()
+@app.post("/cart")
+def add_item(user_id: int, product_id: int):
+    return add_to_cart(user_id, product_id)
 
-for product in products:
-    print(product)
+
+@app.get("/cart/{user_id}")
+def get_user_cart(user_id: int):
+    return get_cart(user_id)
+
+
+@app.delete("/cart/{user_id}/{product_id}")
+def remove_item(user_id: int, product_id: int):
+    return remove_from_cart(user_id, product_id)
+
+
+
+
