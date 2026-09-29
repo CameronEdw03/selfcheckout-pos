@@ -116,3 +116,22 @@ def remove_product(product_id):
     finally:
         cursor.close()
         connection.close()
+
+def get_all_products():
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("SELECT * FROM products")
+
+        products = cursor.fetchall()
+
+        return products
+
+    finally:
+        cursor.close()
+        connection.close()
