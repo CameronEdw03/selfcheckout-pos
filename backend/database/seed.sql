@@ -44,7 +44,18 @@ VALUES
 
 (1019, 'Rice Krispies Treat', 'Cereal bar / Marshmallow', 1.25, 17, 'Snacks'),
 
-(1020, 'Skittles', 'Candy / Fruity', 1.50, 13, 'Snacks');
+(1020, 'Skittles', 'Candy / Fruity', 1.50, 13, 'Snacks'),
+
+(1021, 'Scantron Form', 'Standard Exam Answer Sheet', 0.50, 50, 'Exam Supplies'),
+
+(1022, 'Acrylic Paint Set', '12-Color Acrylic Paint Set', 8.99, 10, 'Art Supplies'),
+
+(1023, 'College T-Shirt', 'Dallas College Cotton T-Shirt', 19.99, 12, 'Apparel'),
+
+(1024, 'Scientific Calculator', 'Basic Scientific Calculator', 14.99, 8, 'Course Supplies'),
+
+(1025, 'Introduction to Programming', 'Programming Fundamentals Textbook', 59.99, 5, 'Books');
+
 
 
 INSERT INTO users
@@ -74,3 +85,16 @@ VALUES
 (10, 'mason.jackson', 'testpassword', 'student', 'S10009'),
 
 (11, 'mia.harris', 'testpassword', 'student', 'S10010');
+
+-- -- Zulika as a manager I can insert categories
+
+-- INSERT INTO categories (category_name, description)
+-- VALUES
+--     ('Snacks', 'Chips, candy, cookies, and other snack foods'),
+--     ('Drinks', 'Water, juice, soda, coffee, and other beverages'),
+--     ('Stationery', 'Pens, pencils, notebooks, folders, and writing supplies'),
+--     ('Exam Supplies', 'Items needed for exams such as calculators, pencils, and erasers'),
+--     ('Art Supplies', 'Drawing, painting, crafting, and other art materials'),
+--     ('Apparel', 'Clothing and accessories such as shirts, hoodies, hats, and bags'),
+--     ('Course Supplies', 'Supplies and materials required for specific courses'),
+--     ('Books', 'Textbooks, reference books, and other educational books');

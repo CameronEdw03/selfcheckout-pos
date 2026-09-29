@@ -15,17 +15,6 @@ CREATE TABLE IF NOT EXISTS products (
     quantity INT NOT NULL DEFAULT 0,
 
     category VARCHAR(50)
-<<<<<<< HEAD
-);
-
-CREATE TABLE IF NOT EXISTS book_store_item (
-    item_id INT PRIMARY KEY AUTO_INCREMENT,
-    item_name VARCHAR(255) NOT NULL,
-    item_description VARCHAR(1000) NOT NULL,
-    price DOUBLE,
-    quantity INT,
-    category VARCHAR(50)
-=======
 
 );
 
@@ -41,5 +30,11 @@ CREATE TABLE IF NOT EXISTS users (
 
     student_id VARCHAR(20)
 
->>>>>>> cam
 );
+
+-- -- Zulikha as a manager I can create a categories table to store product categories. The table will have the following columns:
+-- CREATE TABLE IF NOT EXISTS categories (
+--     category_id INT AUTO_INCREMENT PRIMARY KEY,
+--     category_name VARCHAR(100) NOT NULL UNIQUE,
+--     description VARCHAR(255)
+-- );
