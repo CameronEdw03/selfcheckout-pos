@@ -3,9 +3,17 @@ from cart import add_to_cart, get_cart, remove_from_cart
 from user import get_user, get_student, verify_manager
 from catalog import get_all_products, add_product, edit_product, remove_product
 from pydantic import BaseModel
-
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class DeleteProductRequest(BaseModel):
     user_name: str
@@ -71,4 +79,5 @@ def delete_product(product_id: int, request: DeleteProductRequest):
         )
 
     return {"message": "Product deleted successfully"}
+
 
