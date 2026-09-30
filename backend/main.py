@@ -115,13 +115,39 @@ def get_all_products_endpoint(request: ProductRequest):
 # zulikha as a manager I can get products by category
 
 @app.get("/products/category/{category}")
-def get_products_by_category_api(category: str):
+def get_products_by_category_api(category: str, request: ProductRequest):
+
+    # Get user
+    user = get_user(request.user_name)
+
+    # Check user
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check password
+    if user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check manager role
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view products by category"
+        )
+
+    # Get products for the requested category
     products = get_products_by_category(category)
 
-    if not products:
+    if products is None:
         raise HTTPException(
-            status_code=404,
-            detail=f"No products found in category: {category}"
+            status_code=500,
+            detail="Error retrieving products by category"
         )
 
     return {
@@ -130,15 +156,43 @@ def get_products_by_category_api(category: str):
     }
 
 @app.get("/products/group-by-category")
-def group_products_by_category():
-    results = get_products_grouped_by_category()
+def get_products_by_category_api(request: ProductRequest):
 
-    if not results:
+    # Get user
+    user = get_user(request.user_name)
+
+    # Check if user exists
+    if not user:
         raise HTTPException(
-            status_code=404,
-            detail="No products found"
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check password
+    if user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check manager role
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can group products by category"
+        )
+
+    # Get products grouped by category
+    products = get_products_grouped_by_category()
+
+    # Check for database error
+    if products is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving products by category"
         )
 
     return {
-        "categories": results
+        "categories": products
     }
+
