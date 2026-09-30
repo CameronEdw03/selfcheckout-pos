@@ -1,84 +1,144 @@
-from connection import create_connection
-from user import delete_user, get_all, get_products_by_category, get_user, get_user_byrole, insert_user
+from fastapi import FastAPI, HTTPException
+from cart import add_to_cart, get_cart, remove_from_cart
+from user import get_products_by_category, get_products_grouped_by_category, get_user, get_student
+from catalog import get_all_products, add_product, edit_product, remove_product
+from pydantic import BaseModel
 
 
-# def get_all_users():
-#     connection = create_connection()
+app = FastAPI()
 
-#     if connection:
-#         cursor = connection.cursor(dictionary=True)
+class DeleteProductRequest(BaseModel):
+    user_name: str
+    password: str
 
-#         cursor.execute("SELECT * FROM users")
-
-#         users = cursor.fetchall()
-
-#         cursor.close()
-#         connection.close()
-
-#         return users
-
-#     return []
+#zulikha
+class ProductRequest(BaseModel):
+    user_name: str
+    password: str
 
 
 
-
-# print("USERS")
-# print("--------------------")
-
-# users = get_all_users()
-
-# for user in users:
-#     print(user)
+@app.get("/user")
+def user(username: str):
+    return get_user(username)
 
 
-# print("\nPRODUCTS")
-# print("--------------------")
+@app.get("/student{student_id}")
+def student(student_id: str):
+    return get_student(student_id)
 
-# products = get_all_products()
-
-# for product in products:
-#     print(product)
-
-
+@app.post("/cart")
+def add_item(user_id: int, product_id: int):
+    return add_to_cart(user_id, product_id)
 
 
+@app.get("/cart/{user_id}")
+def get_user_cart(user_id: int):
+    return get_cart(user_id)
 
-#Zulikha adding mock user
-# print("\nINSERT USER")
-# new_username = "jane_doe"
-# new_password = "securepassword"
-# new_role = "student"
-# new_student_id = "123456"
-
-# if insert_user(34,new_username, new_password, new_role, new_student_id):
-#     print("User inserted.")
-# else:
-#     print("Could not connect to the database; user was not inserted.")
-
-#zulikha getting user by username
-# username = "jane_doe"
-# user = get_user(username)
-# print(user if user else "User not found.")
-
-#zulikha deleting user by username
-# username_to_delete = "jane_doe"
-# delete_user(username_to_delete)
-
-# #zulikha getting user by role
-# role='student'
-# user=get_user_byrole(role)
-# print(user if user else "User not found.")
-
-# Zulikha as a manager get all products
-
-# products = get_all("products")
-# print(products)
-
-# Zulikha as a manager I can group products by category and load all products in a specific category
-category = get_products_by_category("books")
-print(category if category else "No products found in this category.")
+#remove from cart
+@app.delete("/cart/{user_id}/{product_id}")
+def remove_item(user_id: int, product_id: int):
+    return remove_from_cart(user_id, product_id)
 
 
+#manager removes item from products database 
+@app.delete("/products/{product_id}")
+def delete_product(product_id: int, request: DeleteProductRequest):
 
+    user = get_user(request.user_name)
 
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
 
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can delete products"
+        )
+
+    if user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if not remove_product(product_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found"
+        )
+
+    return {"message": "Product deleted successfully"}
+
+# zulikha
+# As a manager, I can load a starting catalog of bookstore items
+@app.get("/products")
+def get_all_products_endpoint(request: ProductRequest):
+
+    user = get_user(request.user_name)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can load all products"
+        )
+
+    products = get_all_products()
+
+    if products is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving products"
+        )
+
+    return {
+        "message": "Products retrieved successfully",
+        "products": products
+    }
+
+# zulikha as a manager I can get products by category
+
+@app.get("/products/category/{category}")
+def get_products_by_category_api(category: str):
+    products = get_products_by_category(category)
+
+    if not products:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No products found in category: {category}"
+        )
+
+    return {
+        "category": category,
+        "products": products
+    }
+
+@app.get("/products/group-by-category")
+def group_products_by_category():
+    results = get_products_grouped_by_category()
+
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail="No products found"
+        )
+
+    return {
+        "categories": results
+    }

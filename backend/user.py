@@ -134,33 +134,93 @@ def get_all(products):
             cursor.close()
             connection.close()
 
-# Zulikha as a manager I can group products by category so that I can easily view and manage them. The function will return a dictionary where the keys are category names and the values are lists of products in those categories.
-def get_products_by_category(category_name):
+   
+# as a manager I can load all products.
+
+def get_all_products():
     connection = create_connection()
+
     if connection is None:
-        return []
-    
+        return None
+
     try:
         cursor = connection.cursor(dictionary=True)
-    
+
+        query = "SELECT * FROM products"
+        cursor.execute(query)
+
+        products = cursor.fetchall()
+
+        return products
+
+    except Exception as error:
+        print(f"Error getting products: {error}")
+        return None
+
+    finally:
+        if cursor:
+            cursor.close()
+
+        if connection.is_connected():
+            connection.close()
+
+# Zulikha as a manager I can get products by specificcategory.
+def get_products_by_category(category):
+    connection = create_connection()
+
+    if connection is None:
+        return []
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
         query = """
-            SELECT category_id, category_name, description
-            FROM categories
-            WHERE category_name = %s
+            SELECT product_id, name, price, category
+            FROM products
+            WHERE category = %s
         """
 
-        cursor.execute(query, (category_name,))
-        category = cursor.fetchone()
+        cursor.execute(query, (category,))
+        products = cursor.fetchall()
 
         cursor.close()
         connection.close()
 
-        if category:
-            return category
+        if products:
+            return products
         else:
-            print("Category not found.")
-            return None
+            print("No products found in this category.")
+            return []
 
     except mysql.connector.Error as e:
-        print(f"Error getting category: {e}")
-        return None
+        print(f"Error getting products by category: {e}")
+        return []
+
+# Zulikha as a manager I can group products by categoryand see the total count.
+def get_products_grouped_by_category():
+    connection = create_connection()
+
+    if connection is None:
+        return []
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT category,
+                   COUNT(*) AS total_items
+            FROM products
+            GROUP BY category
+        """
+
+        cursor.execute(query)
+        results = cursor.fetchall()
+
+        cursor.close()
+        connection.close()
+
+        return results
+
+    except mysql.connector.Error as e:
+        print(f"Error grouping products by category: {e}")
+        return []

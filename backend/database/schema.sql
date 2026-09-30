@@ -32,9 +32,3 @@ CREATE TABLE IF NOT EXISTS users (
 
 );
 
--- -- Zulikha as a manager I can create a categories table to store product categories. The table will have the following columns:
--- CREATE TABLE IF NOT EXISTS categories (
---     category_id INT AUTO_INCREMENT PRIMARY KEY,
---     category_name VARCHAR(100) NOT NULL UNIQUE,
---     description VARCHAR(255)
--- );
