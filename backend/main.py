@@ -3,9 +3,17 @@ from cart import add_to_cart, get_cart, remove_from_cart
 from user import get_products_by_category, get_products_grouped_by_category, get_user, get_student
 from catalog import get_all_products, add_product, edit_product, remove_product
 from pydantic import BaseModel
-
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class DeleteProductRequest(BaseModel):
     user_name: str
@@ -77,28 +85,7 @@ def delete_product(product_id: int, request: DeleteProductRequest):
 # zulikha
 # As a manager, I can load a starting catalog of bookstore items
 @app.get("/products")
-def get_all_products_endpoint(request: ProductRequest):
-
-    user = get_user(request.user_name)
-
-    if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid username or password"
-        )
-
-    if user["password"] != request.password:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid username or password"
-        )
-
-    if user["role"] != "manager":
-        raise HTTPException(
-            status_code=403,
-            detail="Only managers can load all products"
-        )
-
+def get_all_products_endpoint():
     products = get_all_products()
 
     if products is None:
@@ -107,10 +94,7 @@ def get_all_products_endpoint(request: ProductRequest):
             detail="Error retrieving products"
         )
 
-    return {
-        "message": "Products retrieved successfully",
-        "products": products
-    }
+    return products
 
 # zulikha as a manager I can get products by category
 
@@ -195,4 +179,5 @@ def get_products_by_category_api(request: ProductRequest):
     return {
         "categories": products
     }
+
 
