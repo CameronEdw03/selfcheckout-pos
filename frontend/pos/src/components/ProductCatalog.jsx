@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 
 function ProductCatalog() {
   const [products, setProducts] = useState([]);
+  const [cart, setCart] = useState({});
+  const [isCartOpen, setIsCartOpen] = useState(false);
   const [category, setCategory] = useState("All");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -44,6 +46,32 @@ function ProductCatalog() {
       return matchesCategory && matchesSearch;
     });
   }, [products, category, search]);
+
+  const cartCount = Object.values(cart).reduce(
+    (total, quantity) => total + quantity,
+    0,
+  );
+  const cartProducts = products.filter((product) => cart[product.product_id]);
+  const cartTotal = cartProducts.reduce(
+    (total, product) =>
+      total + Number(product.price) * cart[product.product_id],
+    0,
+  );
+
+  function addToCart(product) {
+    setCart((currentCart) => {
+      const currentQuantity = currentCart[product.product_id] ?? 0;
+
+      if (currentQuantity >= Number(product.quantity)) {
+        return currentCart;
+      }
+
+      return {
+        ...currentCart,
+        [product.product_id]: currentQuantity + 1,
+      };
+    });
+  }
 
   if (loading) {
     return (
@@ -95,14 +123,81 @@ function ProductCatalog() {
               </div>
             </div>
 
-            <div className="relative w-full md:w-80">
-              <input
-                type="text"
-                placeholder="Search products..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-700 focus:bg-white focus:ring-2 focus:ring-blue-100"
-              />
+            <div className="flex w-full items-center gap-3 md:w-auto">
+              <div className="relative w-full md:w-80">
+                <input
+                  type="text"
+                  placeholder="Search products..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-700 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  aria-expanded={isCartOpen}
+                  aria-controls="cart-panel"
+                  onClick={() => setIsCartOpen((open) => !open)}
+                  className="relative flex h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:text-blue-900"
+                >
+                  Cart
+                  <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-xs font-bold text-white">
+                    {cartCount}
+                  </span>
+                </button>
+
+                {isCartOpen && (
+                  <section
+                    id="cart-panel"
+                    aria-label="Shopping cart"
+                    className="absolute right-0 top-14 z-20 w-[min(22rem,calc(100vw-3rem))] rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+                  >
+                    <h2 className="text-base font-bold text-slate-900">
+                      Your cart
+                    </h2>
+
+                    {cartProducts.length === 0 ? (
+                      <p className="mt-4 text-sm text-slate-500">
+                        Your cart is empty.
+                      </p>
+                    ) : (
+                      <>
+                        <ul className="mt-4 max-h-72 space-y-4 overflow-y-auto">
+                          {cartProducts.map((product) => {
+                            const quantity = cart[product.product_id];
+
+                            return (
+                              <li
+                                key={product.product_id}
+                                className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3 last:border-0"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-slate-800">
+                                    {product.name}
+                                  </p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Qty {quantity} x ${Number(product.price).toFixed(2)}
+                                  </p>
+                                </div>
+                                <span className="shrink-0 text-sm font-semibold text-slate-800">
+                                  ${(Number(product.price) * quantity).toFixed(2)}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+
+                        <div className="mt-2 flex justify-between border-t border-slate-200 pt-4 text-sm font-bold text-slate-900">
+                          <span>Subtotal</span>
+                          <span>${cartTotal.toFixed(2)}</span>
+                        </div>
+                      </>
+                    )}
+                  </section>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -165,6 +260,7 @@ function ProductCatalog() {
                 <button
                   key={product.product_id}
                   disabled={outOfStock}
+                  onClick={() => addToCart(product)}
                   className={`group overflow-hidden rounded-2xl border bg-white text-left shadow-sm transition duration-200 ${
                     outOfStock
                       ? "cursor-not-allowed border-slate-200 opacity-60"
@@ -222,7 +318,7 @@ function ProductCatalog() {
                             : "bg-red-600 text-white group-hover:bg-red-700"
                         }`}
                       >
-                        {outOfStock ? "Unavailable" : "Select"}
+                        {outOfStock ? "Unavailable" : "Add to cart"}
                       </span>
                     </div>
                   </div>

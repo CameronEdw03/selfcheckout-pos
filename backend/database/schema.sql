@@ -31,3 +31,4 @@ CREATE TABLE IF NOT EXISTS users (
     student_id VARCHAR(20)
 
 );
+

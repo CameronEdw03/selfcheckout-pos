@@ -27,10 +27,15 @@ VALUES
 (1020, 'Skittles', 'Candy / Fruity', 1.50, 13, 'Snacks'),
 
 (1021, 'Scantron Form', 'Standard Exam Answer Sheet', 0.50, 50, 'Exam Supplies'),
+
 (1022, 'Acrylic Paint Set', '12-Color Acrylic Paint Set', 8.99, 10, 'Art Supplies'),
+
 (1023, 'College T-Shirt', 'Dallas College Cotton T-Shirt', 19.99, 12, 'Apparel'),
+
 (1024, 'Scientific Calculator', 'Basic Scientific Calculator', 14.99, 8, 'Course Supplies'),
+
 (1025, 'Introduction to Programming', 'Programming Fundamentals Textbook', 59.99, 5, 'Books');
+
 
 
 INSERT INTO users
@@ -47,4 +52,6 @@ VALUES
 (8, 'liam.anderson', 'testpassword', 'student', 'S10007'),
 (9, 'sophia.thomas', 'testpassword', 'student', 'S10008'),
 (10, 'mason.jackson', 'testpassword', 'student', 'S10009'),
+
 (11, 'mia.harris', 'testpassword', 'student', 'S10010');
+

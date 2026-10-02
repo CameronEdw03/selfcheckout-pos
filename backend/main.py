@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from cart import add_to_cart, get_cart, remove_from_cart
-from user import get_user, get_student, verify_manager
+from user import get_products_by_category, get_products_grouped_by_category, get_user, get_student
 from catalog import get_all_products, add_product, edit_product, remove_product
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,9 +19,11 @@ class DeleteProductRequest(BaseModel):
     user_name: str
     password: str
 
-@app.get("/products")
-def products():
-    return get_all_products()
+#zulikha
+class ProductRequest(BaseModel):
+    user_name: str
+    password: str
+
 
 
 @app.get("/user")
@@ -79,5 +81,103 @@ def delete_product(product_id: int, request: DeleteProductRequest):
         )
 
     return {"message": "Product deleted successfully"}
+
+# zulikha
+# As a manager, I can load a starting catalog of bookstore items
+@app.get("/products")
+def get_all_products_endpoint():
+    products = get_all_products()
+
+    if products is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving products"
+        )
+
+    return products
+
+# zulikha as a manager I can get products by category
+
+@app.get("/products/category/{category}")
+def get_products_by_category_api(category: str, request: ProductRequest):
+
+    # Get user
+    user = get_user(request.user_name)
+
+    # Check user
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check password
+    if user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check manager role
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view products by category"
+        )
+
+    # Get products for the requested category
+    products = get_products_by_category(category)
+
+    if products is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving products by category"
+        )
+
+    return {
+        "category": category,
+        "products": products
+    }
+
+@app.get("/products/group-by-category")
+def get_products_by_category_api(request: ProductRequest):
+
+    # Get user
+    user = get_user(request.user_name)
+
+    # Check if user exists
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check password
+    if user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    # Check manager role
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can group products by category"
+        )
+
+    # Get products grouped by category
+    products = get_products_grouped_by_category()
+
+    # Check for database error
+    if products is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving products by category"
+        )
+
+    return {
+        "categories": products
+    }
 
 
