@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 function ProductCatalog() {
+  const navigate = useNavigate();
+
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState({});
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -8,9 +11,33 @@ function ProductCatalog() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
-    fetch("http://localhost:8000/products")
+    const savedUser = localStorage.getItem("user");
+
+    if (!savedUser) {
+      navigate("/login");
+      return;
+    }
+
+    try {
+      const user = JSON.parse(savedUser);
+      setCurrentUser(user);
+    } catch (error) {
+      localStorage.removeItem("user");
+      navigate("/login");
+    }
+  }, [navigate]);
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem("user");
+
+    if (!savedUser) {
+      return;
+    }
+
+    fetch("http://127.0.0.1:8000/products")
       .then((response) => {
         if (!response.ok) {
           throw new Error("Failed to fetch products");
@@ -47,38 +74,46 @@ function ProductCatalog() {
     });
   }, [products, category, search]);
 
-  const cartCount = Object.values(cart).reduce(
-    (total, quantity) => total + quantity,
-    0,
+  const cartProducts = products.filter(
+    (product) => cart[product.product_id]
   );
-  const cartProducts = products.filter((product) => cart[product.product_id]);
+
+  const cartCount = cartProducts.length;
+
   const cartTotal = cartProducts.reduce(
-    (total, product) =>
-      total + Number(product.price) * cart[product.product_id],
-    0,
+    (total, product) => total + Number(product.price),
+    0
   );
 
   function addToCart(product) {
     setCart((currentCart) => {
-      const currentQuantity = currentCart[product.product_id] ?? 0;
-
-      if (currentQuantity >= Number(product.quantity)) {
+      if (currentCart[product.product_id]) {
         return currentCart;
       }
 
       return {
         ...currentCart,
-        [product.product_id]: currentQuantity + 1,
+        [product.product_id]: true,
       };
     });
   }
 
+  function handleLogout() {
+    localStorage.removeItem("user");
+    setCurrentUser(null);
+    setCart({});
+    navigate("/login");
+  }
+
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex min-h-screen items-center justify-center bg-slate-100">
         <div className="text-center">
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-900 border-t-transparent" />
-          <p className="font-medium text-slate-600">Loading products...</p>
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-blue-900 border-t-transparent" />
+
+          <p className="font-semibold text-slate-700">
+            Loading self-checkout...
+          </p>
         </div>
       </div>
     );
@@ -86,8 +121,8 @@ function ProductCatalog() {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
-        <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-8 text-center shadow-sm">
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 px-6">
+        <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-8 text-center shadow-lg">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
             <span className="text-xl font-bold text-red-600">!</span>
           </div>
@@ -96,141 +131,203 @@ function ProductCatalog() {
             Unable to load products
           </h2>
 
-          <p className="mt-2 text-sm text-slate-500">{error}</p>
+          <p className="mt-2 text-sm text-slate-500">
+            {error}
+          </p>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="mt-6 rounded-lg bg-blue-900 px-5 py-3 text-sm font-bold text-white transition hover:bg-blue-800"
+          >
+            Return to Login
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-[1600px] px-6 py-5 lg:px-10">
-          <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-1 rounded-full bg-red-600" />
+    <div className="min-h-screen bg-slate-100">
 
-                <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-blue-950">
-                    Dallas College
-                  </h1>
+      {/* Header */}
+      <header className="border-b-4 border-red-600 bg-white shadow-sm">
+        <div className="mx-auto max-w-[1600px] px-6 py-4 lg:px-10">
 
-                  <p className="text-sm font-medium text-slate-500">
-                    Self-Check Out
-                  </p>
-                </div>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+
+            {/* Dallas College */}
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-900">
+                <span className="text-lg font-black text-white">
+                  DC
+                </span>
+              </div>
+
+              <div>
+                <h1 className="text-2xl font-black tracking-tight text-blue-950">
+                  Dallas College
+                </h1>
+
+                <p className="text-sm font-semibold text-slate-500">
+                  Library Self-Checkout
+                </p>
               </div>
             </div>
 
-            <div className="flex w-full items-center gap-3 md:w-auto">
-              <div className="relative w-full md:w-80">
+            {/* Search / User / Cart */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+
+              {/* Search */}
+              <div className="w-full sm:w-80">
                 <input
                   type="text"
-                  placeholder="Search products..."
+                  placeholder="Search the library store"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-700 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                  className="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-700 focus:bg-white"
                 />
               </div>
 
-              <div className="relative shrink-0">
+              {/* User */}
+              {currentUser && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    Customer
+                  </p>
+
+                  <p className="text-sm font-bold text-blue-950">
+                    {currentUser.username}
+                  </p>
+                </div>
+              )}
+
+              {/* Cart */}
+              <div className="relative">
                 <button
                   type="button"
-                  aria-expanded={isCartOpen}
-                  aria-controls="cart-panel"
                   onClick={() => setIsCartOpen((open) => !open)}
-                  className="relative flex h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:text-blue-900"
+                  className="flex h-12 items-center gap-3 rounded-lg bg-blue-900 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-800"
                 >
-                  Cart
-                  <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-xs font-bold text-white">
+                  <span>Cart</span>
+
+                  <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-red-600 px-2 text-xs font-black">
                     {cartCount}
                   </span>
                 </button>
 
                 {isCartOpen && (
                   <section
-                    id="cart-panel"
-                    aria-label="Shopping cart"
-                    className="absolute right-0 top-14 z-20 w-[min(22rem,calc(100vw-3rem))] rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+                    className="absolute right-0 top-14 z-30 w-[340px] rounded-xl border border-slate-200 bg-white shadow-2xl"
                   >
-                    <h2 className="text-base font-bold text-slate-900">
-                      Your cart
-                    </h2>
+                    <div className="border-b border-slate-200 bg-blue-950 px-5 py-4">
+                      <div className="flex items-center justify-between">
+                        <h2 className="font-bold text-white">
+                          Selected Items
+                        </h2>
+
+                        <span className="text-sm font-semibold text-blue-200">
+                          {cartCount}{" "}
+                          {cartCount === 1 ? "item" : "items"}
+                        </span>
+                      </div>
+                    </div>
 
                     {cartProducts.length === 0 ? (
-                      <p className="mt-4 text-sm text-slate-500">
-                        Your cart is empty.
-                      </p>
+                      <div className="px-5 py-10 text-center">
+                        <p className="font-semibold text-slate-700">
+                          No items selected
+                        </p>
+
+                        <p className="mt-1 text-sm text-slate-500">
+                          Select an item to add it to your cart.
+                        </p>
+                      </div>
                     ) : (
                       <>
-                        <ul className="mt-4 max-h-72 space-y-4 overflow-y-auto">
-                          {cartProducts.map((product) => {
-                            const quantity = cart[product.product_id];
+                        <div className="max-h-80 overflow-y-auto">
+                          {cartProducts.map((product) => (
+                            <div
+                              key={product.product_id}
+                              className="flex items-center justify-between border-b border-slate-100 px-5 py-4"
+                            >
+                              <div className="min-w-0 pr-4">
+                                <p className="truncate text-sm font-bold text-slate-900">
+                                  {product.name}
+                                </p>
 
-                            return (
-                              <li
-                                key={product.product_id}
-                                className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3 last:border-0"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-semibold text-slate-800">
-                                    {product.name}
-                                  </p>
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    Qty {quantity} x ${Number(product.price).toFixed(2)}
-                                  </p>
-                                </div>
-                                <span className="shrink-0 text-sm font-semibold text-slate-800">
-                                  ${(Number(product.price) * quantity).toFixed(2)}
-                                </span>
-                              </li>
-                            );
-                          })}
-                        </ul>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {product.category}
+                                </p>
+                              </div>
 
-                        <div className="mt-2 flex justify-between border-t border-slate-200 pt-4 text-sm font-bold text-slate-900">
-                          <span>Subtotal</span>
-                          <span>${cartTotal.toFixed(2)}</span>
+                              <p className="shrink-0 text-sm font-bold text-blue-950">
+                                ${Number(product.price).toFixed(2)}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="border-t-2 border-slate-200 bg-slate-50 px-5 py-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-semibold text-slate-600">
+                              Current Total
+                            </span>
+
+                            <span className="text-xl font-black text-blue-950">
+                              ${cartTotal.toFixed(2)}
+                            </span>
+                          </div>
                         </div>
                       </>
                     )}
                   </section>
                 )}
               </div>
+
+              {/* Sign Out */}
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="h-12 rounded-lg border-2 border-red-600 bg-white px-5 text-sm font-bold text-red-600 transition hover:bg-red-50"
+              >
+                Sign Out
+              </button>
             </div>
           </div>
         </div>
       </header>
 
+      {/* Main */}
       <main className="mx-auto max-w-[1600px] px-6 py-8 lg:px-10">
-        <div className="mb-8">
-          <div className="mb-5 flex items-end justify-between">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">
-                Products
-              </h2>
 
-              <p className="mt-1 text-sm text-slate-500">
-                Browse available items and select a product to continue.
-              </p>
-            </div>
+        {/* Store Header */}
+        <div className="mb-6 rounded-xl bg-blue-950 px-6 py-6 text-white shadow-sm">
+          <p className="text-sm font-bold uppercase tracking-wider text-blue-200">
+            Dallas College Library
+          </p>
 
-            <p className="hidden text-sm font-medium text-slate-500 sm:block">
-              {filteredProducts.length}{" "}
-              {filteredProducts.length === 1 ? "item" : "items"}
-            </p>
-          </div>
+          <h2 className="mt-1 text-3xl font-black">
+            Self-Checkout
+          </h2>
 
-          <div className="flex gap-2 overflow-x-auto pb-2">
+          <p className="mt-2 text-sm text-blue-100">
+            Select the items you would like to check out.
+          </p>
+        </div>
+
+        {/* Categories */}
+        <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex gap-2 overflow-x-auto">
             {categories.map((item) => (
               <button
                 key={item}
+                type="button"
                 onClick={() => setCategory(item)}
-                className={`whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
+                className={`whitespace-nowrap rounded-lg px-5 py-3 text-sm font-bold transition ${
                   category === item
-                    ? "bg-blue-900 text-white shadow-sm"
-                    : "border border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-900"
+                    ? "bg-red-600 text-white shadow-sm"
+                    : "border border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-900"
                 }`}
               >
                 {item}
@@ -239,66 +336,89 @@ function ProductCatalog() {
           </div>
         </div>
 
+        {/* Product Count */}
+        <div className="mb-5 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-black text-slate-900">
+              Available Items
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500">
+              Tap an item to add it to your checkout.
+            </p>
+          </div>
+
+          <p className="text-sm font-bold text-slate-500">
+            {filteredProducts.length}{" "}
+            {filteredProducts.length === 1 ? "item" : "items"}
+          </p>
+        </div>
+
+        {/* Products */}
         {filteredProducts.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white px-6 py-20 text-center shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900">
-              No products found
+          <div className="rounded-xl border border-slate-200 bg-white px-6 py-20 text-center shadow-sm">
+            <h3 className="text-lg font-bold text-slate-900">
+              No items found
             </h3>
 
             <p className="mt-2 text-sm text-slate-500">
-              Try changing your search or selecting another category.
+              Try another search or category.
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+
             {filteredProducts.map((product) => {
-              const outOfStock = product.quantity <= 0;
-              const lowStock =
-                product.quantity > 0 && product.quantity <= 5;
+              const outOfStock = Number(product.quantity) <= 0;
+              const alreadySelected = Boolean(
+                cart[product.product_id]
+              );
 
               return (
                 <button
                   key={product.product_id}
+                  type="button"
                   disabled={outOfStock}
                   onClick={() => addToCart(product)}
-                  className={`group overflow-hidden rounded-2xl border bg-white text-left shadow-sm transition duration-200 ${
+                  className={`group overflow-hidden rounded-xl border bg-white text-left shadow-sm transition ${
                     outOfStock
                       ? "cursor-not-allowed border-slate-200 opacity-60"
-                      : "border-slate-200 hover:-translate-y-1 hover:border-blue-300 hover:shadow-lg"
+                      : alreadySelected
+                      ? "border-blue-700 ring-2 ring-blue-100"
+                      : "border-slate-200 hover:-translate-y-1 hover:border-blue-400 hover:shadow-lg"
                   }`}
                 >
-                  <div className="relative flex h-40 items-center justify-center bg-gradient-to-br from-blue-50 to-slate-100">
-                    <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-blue-900 shadow-md">
-                      <span className="text-2xl font-bold text-white">
+
+                  {/* Product Top */}
+                  <div className="relative flex h-40 items-center justify-center bg-slate-100">
+
+                    <div className="flex h-20 w-20 items-center justify-center rounded-lg bg-blue-900 shadow-md">
+                      <span className="text-3xl font-black text-white">
                         {product.name.charAt(0)}
                       </span>
                     </div>
 
-                    <div className="absolute right-3 top-3">
-                      {outOfStock ? (
-                        <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-700">
-                          Out of stock
-                        </span>
-                      ) : lowStock ? (
-                        <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-700">
-                          Low stock
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">
-                          {product.quantity} available
-                        </span>
-                      )}
-                    </div>
+                    {alreadySelected && (
+                      <div className="absolute left-3 top-3 rounded-md bg-blue-900 px-3 py-1 text-xs font-bold text-white">
+                        Selected
+                      </div>
+                    )}
+
+                    {outOfStock && (
+                      <div className="absolute right-3 top-3 rounded-md bg-red-600 px-3 py-1 text-xs font-bold text-white">
+                        Out of Stock
+                      </div>
+                    )}
                   </div>
 
+                  {/* Product Details */}
                   <div className="p-5">
-                    <div className="mb-2">
-                      <span className="text-xs font-bold uppercase tracking-wide text-red-600">
-                        {product.category}
-                      </span>
-                    </div>
 
-                    <h3 className="min-h-6 text-lg font-bold text-slate-900">
+                    <p className="mb-2 text-xs font-black uppercase tracking-wide text-red-600">
+                      {product.category}
+                    </p>
+
+                    <h3 className="min-h-6 text-lg font-black text-slate-900">
                       {product.name}
                     </h3>
 
@@ -307,19 +427,27 @@ function ProductCatalog() {
                     </p>
 
                     <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
-                      <span className="text-xl font-bold text-blue-950">
+
+                      <span className="text-xl font-black text-blue-950">
                         ${Number(product.price).toFixed(2)}
                       </span>
 
                       <span
-                        className={`rounded-lg px-3 py-2 text-sm font-bold ${
+                        className={`rounded-lg px-4 py-2 text-sm font-black ${
                           outOfStock
                             ? "bg-slate-100 text-slate-400"
+                            : alreadySelected
+                            ? "bg-blue-100 text-blue-900"
                             : "bg-red-600 text-white group-hover:bg-red-700"
                         }`}
                       >
-                        {outOfStock ? "Unavailable" : "Add to cart"}
+                        {outOfStock
+                          ? "Unavailable"
+                          : alreadySelected
+                          ? "Selected"
+                          : "Add"}
                       </span>
+
                     </div>
                   </div>
                 </button>
@@ -328,8 +456,36 @@ function ProductCatalog() {
           </div>
         )}
       </main>
+
+      {/* Bottom Checkout Bar */}
+      {cartCount > 0 && (
+        <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between px-6 py-4 lg:px-10">
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                Current Total
+              </p>
+
+              <p className="text-2xl font-black text-blue-950">
+                ${cartTotal.toFixed(2)}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsCartOpen(true)}
+              className="rounded-lg bg-red-600 px-6 py-3 text-sm font-black text-white shadow-sm transition hover:bg-red-700"
+            >
+              View Selected Items
+            </button>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 export default ProductCatalog;
+

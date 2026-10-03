@@ -9,7 +9,10 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,7 +27,40 @@ class ProductRequest(BaseModel):
     user_name: str
     password: str
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
+
+
+#login logic (cam)
+@app.post("/auth/login")
+def login(request: LoginRequest):
+
+    user = get_user(request.username)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+    if not user["active"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Account is not active"
+        )
+    if user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+    return {
+        "message": "Login successful",
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "role": user["role"],
+        "student_id": user["student_id"]
+    }
 
 @app.get("/user")
 def user(username: str):
