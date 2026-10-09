@@ -1,5 +1,7 @@
+import json
 from decimal import Decimal
 from connection import create_connection
+
 
 
 def add_to_cart(user_id, product_id):
@@ -179,3 +181,73 @@ def get_cart_total(user_id):
         cursor.close()
         connection.close()
 
+
+# Saves an order to the database for receipt printing and order history
+def save_order(user_id):
+    cart = get_cart(user_id)
+
+    if not cart:
+        return None
+
+    total = sum(
+        Decimal(str(item["price"])) * item["quantity"]
+        for item in cart
+    )
+
+    products = [
+        {
+            "product_id": item["product_id"],
+            "name": item["name"],
+            "quantity": item["quantity"],
+            "unit_price": str(item["price"])
+        }
+        for item in cart
+    ]
+
+    connection = create_connection()
+
+    if not connection:
+        return None
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+
+        query = """
+            INSERT INTO orders
+                (user_id, products, total, payment_status)
+            VALUES (%s, %s, %s, %s)
+        """
+
+        cursor.execute(
+            query,
+            (
+                user_id,
+                json.dumps(products),
+                total,
+                "pending"
+            )
+        )
+
+        connection.commit()
+
+        order_id = cursor.lastrowid
+
+        return {
+            "order_id": order_id,
+            "user_id": user_id,
+            "products": products,
+            "total": str(total),
+            "payment_status": "pending"
+        }
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error saving order: {error}")
+        return None
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
