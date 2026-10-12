@@ -103,7 +103,40 @@ def remove_from_cart(user_id, product_id):
     finally:
         cursor.close()
         connection.close()
+# zulikha
+def remove_from_cart(user_id):
+    """Remove a product completely from a user's cart."""
 
+    connection = create_connection()
+
+    if not connection:
+        return False
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            DELETE FROM cart_items
+            WHERE user_id = %s
+            """,
+            (user_id)
+        )
+
+        connection.commit()
+
+        if cursor.rowcount == 0:
+            return False
+
+        return True
+
+    except Exception as error:
+        print(f"Error removing item from cart: {error}")
+        return False
+
+    finally:
+        cursor.close()
+        connection.close()
 
 def get_cart(user_id):
     """Get all products currently in a user's cart."""

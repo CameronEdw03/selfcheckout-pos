@@ -43,7 +43,11 @@ function Login() {
 
             localStorage.setItem("user", JSON.stringify(user));
 
-            navigate("/ProductCatalog");
+            navigate(
+                user.role === "manager"
+                    ? "/manager-dashboard"
+                    : "/ProductCatalog"
+            );
 
         } catch (error) {
             setError("Unable to connect to the checkout system.");
@@ -253,4 +257,3 @@ function Login() {
 }
 
 export default Login;
-
