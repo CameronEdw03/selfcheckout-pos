@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from cart import add_to_cart, get_cart, remove_from_cart, update_cart_quantity, get_cart_total
+from cart import add_to_cart, get_cart, remove_from_cart, get_cart_total, update_cart_quantity
 from user import get_products_by_category, get_products_grouped_by_category, get_user, get_student
 from catalog import get_all_products, add_product, edit_product, remove_product
 from pydantic import BaseModel
