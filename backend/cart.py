@@ -158,7 +158,9 @@ def get_cart(user_id):
                 p.name,
                 p.description,
                 p.price,
-                p.category
+                p.category,
+                (p.price * c.quantity) AS line_total
+                
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id
@@ -240,45 +242,41 @@ def save_order(user_id):
     connection = create_connection()
 
     if not connection:
-        return None
+        return False
 
     cursor = None
 
     try:
         cursor = connection.cursor()
 
-        query = """
-            INSERT INTO orders
-                (user_id, products, total, payment_status)
-            VALUES (%s, %s, %s, %s)
-        """
-
         cursor.execute(
-            query,
-            (
-                user_id,
-                json.dumps(products),
-                total,
-                "pending"
-            )
+            """
+            UPDATE cart_items
+            SET quantity = %s
+            WHERE user_id = %s AND product_id = %s
+            """,
+            (quantity, user_id, product_id)
         )
 
+        cursor.execute(
+            """
+            SELECT cart_item_id
+            FROM cart_items
+            WHERE user_id = %s AND product_id = %s
+            """,
+            (user_id, product_id)
+        )
+
+        if cursor.fetchone() is None:
+            return False
+
         connection.commit()
-
-        order_id = cursor.lastrowid
-
-        return {
-            "order_id": order_id,
-            "user_id": user_id,
-            "products": products,
-            "total": str(total),
-            "payment_status": "pending"
-        }
+        return True
 
     except Exception as error:
         connection.rollback()
-        print(f"Error saving order: {error}")
-        return None
+        print(f"Error updating cart quantity: {error}")
+        return False
 
     finally:
         if cursor is not None:
