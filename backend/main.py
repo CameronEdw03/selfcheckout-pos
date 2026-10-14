@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from cart import add_to_cart, get_cart, remove_from_cart
+from cart import add_to_cart, get_cart, remove_from_cart, get_cart_total, update_cart_quantity
 from user import get_products_by_category, get_products_grouped_by_category, get_user, get_student
 from catalog import (
     get_all_products,
@@ -10,6 +10,7 @@ from catalog import (
 )
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+from payment import pay_with_cash, pay_with_card
 
 app = FastAPI()
 
@@ -119,6 +120,104 @@ def clear_user_cart(user_id: int):
 def remove_item(user_id: int, product_id: int):
     return remove_from_cart(user_id, product_id)
 
+
+
+# Sprint 2: Update cart item quantity
+class UpdateQuantityRequest(BaseModel):
+    quantity: int
+
+
+@app.put("/cart/{user_id}/{product_id}")
+def update_item_quantity(
+    user_id: int,
+    product_id: int,
+    request: UpdateQuantityRequest
+):
+    if request.quantity < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Quantity must be at least 1"
+        )
+
+    updated = update_cart_quantity(
+        user_id,
+        product_id,
+        request.quantity
+    )
+
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="Cart item not found or could not be updated"
+        )
+
+    return {
+        "message": "Cart quantity updated successfully",
+        "cart": get_cart(user_id),
+        "total": get_cart_total(user_id)
+    }
+
+
+
+# Sprint 2: Cash payment
+class CashPaymentRequest(BaseModel):
+    cash_received: str
+
+
+@app.post("/checkout/{user_id}/cash")
+def cash_checkout(user_id: int, request: CashPaymentRequest):
+    total = get_cart_total(user_id)
+
+    if total <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cart is empty."
+        )
+
+    result = pay_with_cash(total, request.cash_received)
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=result["message"]
+        )
+
+    return {
+        "message": result["message"],
+        "total": total,
+        "cash_received": request.cash_received,
+        "change": result["change"]
+    }
+
+
+
+# Sprint 2: Simulated card payment
+class CardPaymentRequest(BaseModel):
+    approved: bool
+
+
+@app.post("/checkout/{user_id}/card")
+def card_checkout(user_id: int, request: CardPaymentRequest):
+    total = get_cart_total(user_id)
+
+    if total <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cart is empty."
+        )
+
+    result = pay_with_card(total, request.approved)
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=result["message"]
+        )
+
+    return {
+        "message": result["message"],
+        "total": total
+    }
 
 #manager removes item from products database 
 @app.delete("/products/{product_id}")
