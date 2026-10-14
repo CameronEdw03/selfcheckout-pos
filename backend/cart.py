@@ -123,7 +123,9 @@ def get_cart(user_id):
                 p.name,
                 p.description,
                 p.price,
-                p.category
+                p.category,
+                (p.price * c.quantity) AS line_total
+                
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id
@@ -179,3 +181,54 @@ def get_cart_total(user_id):
         cursor.close()
         connection.close()
 
+
+
+def update_cart_quantity(user_id, product_id, quantity):
+    """Update the quantity of a product in a student's cart."""
+
+    if type(quantity) is not int or quantity < 1:
+        return False
+
+    connection = create_connection()
+
+    if not connection:
+        return False
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            UPDATE cart_items
+            SET quantity = %s
+            WHERE user_id = %s AND product_id = %s
+            """,
+            (quantity, user_id, product_id)
+        )
+
+        cursor.execute(
+            """
+            SELECT cart_item_id
+            FROM cart_items
+            WHERE user_id = %s AND product_id = %s
+            """,
+            (user_id, product_id)
+        )
+
+        if cursor.fetchone() is None:
+            return False
+
+        connection.commit()
+        return True
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error updating cart quantity: {error}")
+        return False
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
