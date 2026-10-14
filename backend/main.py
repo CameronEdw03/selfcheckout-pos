@@ -39,17 +39,18 @@ class LoginRequest(BaseModel):
 def login(request: LoginRequest):
 
     user = get_user(request.username)
-
+    print("user------------");
+    print(user);
     if not user:
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password"
         )
-    if not user["active"]:
-        raise HTTPException(
-            status_code=403,
-            detail="Account is not active"
-        )
+    # if not user["active"]:
+    #     raise HTTPException(
+    #         status_code=403,
+    #         detail="Account is not active"
+    #     )
     if user["password"] != request.password:
         raise HTTPException(
             status_code=401,
@@ -80,6 +81,10 @@ def add_item(user_id: int, product_id: int):
 @app.get("/cart/{user_id}")
 def get_user_cart(user_id: int):
     return get_cart(user_id)
+# zulikha
+@app.delete("/cart/{user_id}")
+def clear_user_cart(user_id: int):
+    return remove_from_cart(user_id)
 
 #remove from cart
 @app.delete("/cart/{user_id}/{product_id}")

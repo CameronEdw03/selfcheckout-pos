@@ -1,6 +1,7 @@
 
 import ProductCatalog from "./components/ProductCatalog";
 import Login from "./components/Login";
+import ManagerDashboard from "./components/ManagerDashboard";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 function App() {
@@ -14,6 +15,11 @@ function App() {
                 
                 <Route path="/ProductCatalog" element={<ProductCatalog />} />
 
+                <Route
+                    path="/manager-dashboard"
+                    element={<ManagerDashboard />}
+                />
+
                 
                 <Route
                     path="/"
@@ -26,4 +32,3 @@ function App() {
 }
 
 export default App;
-

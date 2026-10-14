@@ -23,6 +23,11 @@ function ProductCatalog() {
 
     try {
       const user = JSON.parse(savedUser);
+      if (user.role === "manager") {
+        navigate("/manager-dashboard");
+        return;
+      }
+
       setCurrentUser(user);
     } catch (error) {
       localStorage.removeItem("user");
@@ -96,6 +101,18 @@ function ProductCatalog() {
         [product.product_id]: true,
       };
     });
+  }
+// zulikha
+  function removeFromCart(productId) {
+    setCart((currentCart) => {
+      const updatedCart = { ...currentCart };
+      delete updatedCart[productId];
+      return updatedCart;
+    });
+  }
+// zulikha
+  function removeAllFromCart() {
+    setCart({});
   }
 
   function handleLogout() {
@@ -261,22 +278,43 @@ function ProductCatalog() {
                                 </p>
                               </div>
 
-                              <p className="shrink-0 text-sm font-bold text-blue-950">
-                                ${Number(product.price).toFixed(2)}
-                              </p>
+                              <div className="flex shrink-0 flex-col items-end gap-2">
+                                <p className="text-sm font-bold text-blue-950">
+                                  ${Number(product.price).toFixed(2)}
+                                </p>
+
+                                <button
+                                  type="button"
+                                  onClick={() => removeFromCart(product.product_id)}
+                                  aria-label={`Remove ${product.name} from cart`}
+                                  className="text-xs font-bold text-red-600 transition hover:text-red-800"
+                                >
+                                  Remove
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
 
                         <div className="border-t-2 border-slate-200 bg-slate-50 px-5 py-4">
                           <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-slate-600">
-                              Current Total
-                            </span>
+                            <div>
+                              <span className="block text-sm font-semibold text-slate-600">
+                                Current Total
+                              </span>
 
-                            <span className="text-xl font-black text-blue-950">
-                              ${cartTotal.toFixed(2)}
-                            </span>
+                              <span className="text-xl font-black text-blue-950">
+                                ${cartTotal.toFixed(2)}
+                              </span>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={removeAllFromCart}
+                              className="rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50 hover:text-red-800"
+                            >
+                              Remove all
+                            </button>
                           </div>
                         </div>
                       </>
@@ -488,4 +526,3 @@ function ProductCatalog() {
 }
 
 export default ProductCatalog;
-
