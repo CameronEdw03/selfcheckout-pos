@@ -1,4 +1,5 @@
 
+
 from decimal import Decimal
 from connection import create_connection
 
@@ -144,7 +145,7 @@ def remove_from_cart(user_id, product_id=None):
 
 
 def get_cart(user_id):
-    """Return all products currently in a user's cart."""
+    """Return cart products with discount and line-total information."""
     connection = create_connection()
     if not connection:
         return []
@@ -164,8 +165,17 @@ def get_cart(user_id):
                 p.name,
                 p.description,
                 p.price,
+                COALESCE(p.discount_percent, 0) AS discount_percent,
+                ROUND(
+                    p.price * (1 - COALESCE(p.discount_percent, 0) / 100.0),
+                    2
+                ) AS discounted_price,
                 p.category,
-                (p.price * c.quantity) AS line_total
+                ROUND(
+                    p.price * (1 - COALESCE(p.discount_percent, 0) / 100.0)
+                    * c.quantity,
+                    2
+                ) AS line_total
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id
@@ -187,7 +197,7 @@ def get_cart(user_id):
 
 
 def get_cart_total(user_id):
-    """Calculate the total price of the user's cart."""
+    """Calculate the cart total using discounted prices."""
     connection = create_connection()
     if not connection:
         return Decimal("0.00")
@@ -199,7 +209,16 @@ def get_cart_total(user_id):
 
         cursor.execute(
             """
-            SELECT SUM(p.price * c.quantity)
+            SELECT COALESCE(
+                SUM(
+                    ROUND(
+                        p.price
+                        * (1 - COALESCE(p.discount_percent, 0) / 100.0),
+                        2
+                    ) * c.quantity
+                ),
+                0
+            )
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id
@@ -209,10 +228,6 @@ def get_cart_total(user_id):
         )
 
         result = cursor.fetchone()
-
-        if not result or result[0] is None:
-            return Decimal("0.00")
-
         return Decimal(str(result[0]))
 
     except Exception as error:
@@ -225,11 +240,10 @@ def get_cart_total(user_id):
         connection.close()
 
 
-def save_order(user_id):
-    """Prepare receipt data from the user's current cart.
+def prepare_receipt_data(user_id):
+    """Prepare receipt details from the current cart.
 
-    This prepares receipt data but does not permanently
-    save an order in the database.
+    This does not save an order or complete checkout.
     """
     cart = get_cart(user_id)
 
@@ -240,15 +254,16 @@ def save_order(user_id):
     total = Decimal("0.00")
 
     for item in cart:
-        unit_price = Decimal(str(item["price"]))
+        unit_price = Decimal(str(item["discounted_price"]))
         quantity = int(item["quantity"])
-        line_total = unit_price * quantity
+        line_total = Decimal(str(item["line_total"]))
 
         products.append({
             "product_id": item["product_id"],
             "name": item["name"],
             "quantity": quantity,
             "unit_price": str(unit_price),
+            "discount_percent": str(item["discount_percent"]),
             "line_total": str(line_total)
         })
 
@@ -257,5 +272,6 @@ def save_order(user_id):
     return {
         "user_id": user_id,
         "products": products,
-        "total": str(total)
+        "total": str(total.quantize(Decimal("0.01")))
     }
+

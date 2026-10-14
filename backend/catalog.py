@@ -56,7 +56,8 @@ def edit_product(product_id, name, description, price, quantity, category):
                 description = %s,
                 price = %s,
                 quantity = %s,
-                category = %s
+                category = %s,
+                discount_percent = CASE WHEN %s >= 5 THEN 0 ELSE discount_percent END
             WHERE product_id = %s
         """
 
@@ -66,6 +67,7 @@ def edit_product(product_id, name, description, price, quantity, category):
             price,
             quantity,
             category,
+            quantity,
             product_id
         )
 
@@ -83,6 +85,50 @@ def edit_product(product_id, name, description, price, quantity, category):
 
     finally:
         cursor.close()
+        connection.close()
+
+def apply_low_stock_discount(product_id, discount_percent=5):
+    """Apply the fixed discount only when a product is below the stock threshold."""
+    connection = create_connection()
+
+    if not connection:
+        return "unavailable"
+
+    cursor = None
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            UPDATE products
+            SET discount_percent = %s
+            WHERE product_id = %s
+              AND quantity < 5
+              AND discount_percent = 0
+            """,
+            (discount_percent, product_id)
+        )
+        connection.commit()
+
+        if cursor.rowcount > 0:
+            return "applied"
+
+        cursor.execute(
+            "SELECT quantity, discount_percent FROM products WHERE product_id = %s",
+            (product_id,)
+        )
+        product = cursor.fetchone()
+
+        if not product:
+            return "not_found"
+        if product[0] >= 5:
+            return "stock_not_eligible"
+        return "already_discounted"
+    except Exception as error:
+        print(f"Error applying product discount: {error}")
+        return "unavailable"
+    finally:
+        if cursor:
+            cursor.close()
         connection.close()
 
 
