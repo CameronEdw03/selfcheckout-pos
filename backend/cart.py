@@ -156,6 +156,8 @@ def get_cart(user_id):
                 p.name,
                 p.description,
                 p.price,
+                p.discount_percent,
+                ROUND(p.price * (1 - p.discount_percent / 100), 2) AS discounted_price,
                 p.category
             FROM cart_items AS c
             JOIN products AS p
@@ -188,7 +190,9 @@ def get_cart_total(user_id):
         cursor = connection.cursor()
 
         query = """
-            SELECT SUM(p.price * c.quantity)
+            SELECT SUM(
+                ROUND(p.price * (1 - p.discount_percent / 100), 2) * c.quantity
+            )
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id
@@ -211,4 +215,3 @@ def get_cart_total(user_id):
     finally:
         cursor.close()
         connection.close()
-

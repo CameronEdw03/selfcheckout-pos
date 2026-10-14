@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS products (
 
     quantity INT NOT NULL DEFAULT 0,
 
-    category VARCHAR(50)
+    category VARCHAR(50),
+
+    discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0
 
 );
 
@@ -31,4 +33,3 @@ CREATE TABLE IF NOT EXISTS users (
     student_id VARCHAR(20)
 
 );
-
