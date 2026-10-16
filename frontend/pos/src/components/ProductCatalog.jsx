@@ -86,7 +86,7 @@ function ProductCatalog() {
   const cartCount = cartProducts.length;
 
   const cartTotal = cartProducts.reduce(
-    (total, product) => total + Number(product.price),
+    (total, product) => total + getProductPrice(product),
     0
   );
 
@@ -280,8 +280,13 @@ function ProductCatalog() {
 
                               <div className="flex shrink-0 flex-col items-end gap-2">
                                 <p className="text-sm font-bold text-blue-950">
-                                  ${Number(product.price).toFixed(2)}
+                                  ${getProductPrice(product).toFixed(2)}
                                 </p>
+                                {Number(product.discount_percent) > 0 && (
+                                  <p className="text-xs font-bold text-green-700">
+                                    {Number(product.discount_percent)}% off
+                                  </p>
+                                )}
 
                                 <button
                                   type="button"
@@ -466,8 +471,20 @@ function ProductCatalog() {
 
                     <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
 
-                      <span className="text-xl font-black text-blue-950">
-                        ${Number(product.price).toFixed(2)}
+                      <span className="flex flex-col items-end">
+                        {Number(product.discount_percent) > 0 && (
+                          <span className="text-sm text-slate-400 line-through">
+                            ${Number(product.price).toFixed(2)}
+                          </span>
+                        )}
+                        <span className="text-xl font-black text-blue-950">
+                          ${getProductPrice(product).toFixed(2)}
+                        </span>
+                        {Number(product.discount_percent) > 0 && (
+                          <span className="text-xs font-bold text-green-700">
+                            {Number(product.discount_percent)}% off
+                          </span>
+                        )}
                       </span>
 
                       <span
@@ -523,6 +540,12 @@ function ProductCatalog() {
       )}
     </div>
   );
+}
+
+function getProductPrice(product) {
+  const price = Number(product.price);
+  const discountPercent = Number(product.discount_percent) || 0;
+  return Number((price * (1 - discountPercent / 100)).toFixed(2));
 }
 
 export default ProductCatalog;

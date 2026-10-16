@@ -1,8 +1,14 @@
 from fastapi import FastAPI, HTTPException
-from cart import add_to_cart, get_cart, remove_from_cart, update_cart_quantity, get_cart_total
+from cart import add_to_cart, get_cart, remove_from_cart, get_cart_total, update_cart_quantity
 from user import get_products_by_category, get_products_grouped_by_category, get_user, get_student
-from catalog import get_all_products, add_product, edit_product, remove_product
-from pydantic import BaseModel
+from catalog import (
+    get_all_products,
+    add_product,
+    edit_product,
+    apply_low_stock_discount,
+    remove_product,
+)
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from payment import pay_with_cash, pay_with_card
 
@@ -20,6 +26,29 @@ app.add_middleware(
 )
 
 class DeleteProductRequest(BaseModel):
+    user_name: str
+    password: str
+
+class CreateProductRequest(BaseModel):
+    user_name: str
+    password: str
+    product_id: int = Field(gt=0)
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    price: float = Field(ge=0)
+    quantity: int = Field(ge=0)
+    category: str = Field(min_length=1)
+
+class UpdateProductRequest(BaseModel):
+    user_name: str
+    password: str
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    price: float = Field(ge=0)
+    quantity: int = Field(ge=0)
+    category: str = Field(min_length=1)
+
+class ProductDiscountRequest(BaseModel):
     user_name: str
     password: str
 
@@ -222,6 +251,123 @@ def delete_product(product_id: int, request: DeleteProductRequest):
 
     return {"message": "Product deleted successfully"}
 
+@app.post("/products", status_code=201)
+def create_product(request: CreateProductRequest):
+    user = get_user(request.user_name)
+
+    if not user or user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can add products"
+        )
+
+    product_name = request.name.strip()
+    description = request.description.strip()
+    category = request.category.strip()
+    if not product_name or not description or not category:
+        raise HTTPException(
+            status_code=422,
+            detail="Product name, description, and category cannot be blank"
+        )
+
+    if not add_product(
+        request.product_id,
+        product_name,
+        description,
+        request.price,
+        request.quantity,
+        category
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to add product. Please verify the details and try again."
+        )
+
+    return {"message": "Product added successfully"}
+
+@app.put("/products/{product_id}")
+def update_product(product_id: int, request: UpdateProductRequest):
+    user = get_user(request.user_name)
+
+    if not user or user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can update products"
+        )
+
+    product_name = request.name.strip()
+    description = request.description.strip()
+    category = request.category.strip()
+    if not product_name or not description or not category:
+        raise HTTPException(
+            status_code=422,
+            detail="Product name, description, and category cannot be blank"
+        )
+
+    if not edit_product(
+        product_id,
+        product_name,
+        description,
+        request.price,
+        request.quantity,
+        category
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or could not be updated"
+        )
+
+    return {"message": "Product updated successfully"}
+
+@app.post("/products/{product_id}/discount")
+def discount_product(product_id: int, request: ProductDiscountRequest):
+    user = get_user(request.user_name)
+
+    if not user or user["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if user["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can discount products"
+        )
+
+    result = apply_low_stock_discount(product_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="Product not found")
+    if result == "stock_not_eligible":
+        raise HTTPException(
+            status_code=409,
+            detail="A 5% discount is only available when stock is below 5"
+        )
+    if result == "already_discounted":
+        raise HTTPException(
+            status_code=409,
+            detail="This product already has a discount"
+        )
+    if result != "applied":
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to apply the product discount"
+        )
+
+    return {"message": "5% discount applied successfully"}
+
 # zulikha
 # As a manager, I can load a starting catalog of bookstore items
 @app.get("/products")
@@ -319,5 +465,3 @@ def get_products_by_category_api(request: ProductRequest):
     return {
         "categories": products
     }
-
-
