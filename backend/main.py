@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -94,66 +94,149 @@ class UpdateQuantityRequest(BaseModel):
 
 class CashPaymentRequest(BaseModel):
     cash_received: str
+    student_id: str | None = None
 
 
 class CardPaymentRequest(BaseModel):
     approved: bool
+    student_id: str | None = None
 
 
 # -------------------------
 # Checkout / receipt helpers
 # -------------------------
 
-def get_order_items_from_cart(user_id: int):
+def calculate_checkout_totals(user_id: int, student_id: str | None = None):
     """
-    Convert the current cart into the item format expected by create_order.
+    Calculate the checkout subtotal and final total.
 
-    The receipt/order function expects each item to include:
-    product_id, quantity, and price.
+    Existing cart item discounts are retained. If a valid student ID is
+    provided, apply an additional 10% discount to Books-category items only.
+
+    Returns the subtotal, student discount, final total, and order items
+    with the final unit prices that should be saved to the order.
     """
     cart_items = get_cart(user_id)
 
     if not cart_items:
-        return []
+        raise HTTPException(
+            status_code=400,
+            detail="Cart is empty.",
+        )
 
+    valid_student = None
+
+    if student_id and student_id.strip():
+        valid_student = get_student(student_id.strip())
+
+        if not valid_student:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid student ID. Please enter a valid student ID.",
+            )
+
+        # If the users table has an active field, reject inactive accounts.
+        if (
+            valid_student.get("active") is not None
+            and not bool(valid_student["active"])
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="This student account is inactive.",
+            )
+
+    subtotal = Decimal("0.00")
+    final_total = Decimal("0.00")
     order_items = []
 
     for item in cart_items:
         quantity = int(item["quantity"])
 
-        # Use the discounted unit price when the cart provides it.
+        if quantity < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cart item quantity must be at least 1.",
+            )
+
+        # Use the cart's current discounted price when available.
         if item.get("discounted_price") is not None:
             unit_price = Decimal(str(item["discounted_price"]))
         elif item.get("price") is not None:
             unit_price = Decimal(str(item["price"]))
-        elif item.get("line_total") is not None and quantity > 0:
+        elif item.get("line_total") is not None:
             unit_price = Decimal(str(item["line_total"])) / quantity
         else:
             raise HTTPException(
                 status_code=500,
-                detail="Cart item is missing its price",
+                detail="Cart item is missing its price.",
             )
+
+        unit_price = unit_price.quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+        item_subtotal = unit_price * quantity
+        subtotal += item_subtotal
+
+        final_unit_price = unit_price
+
+        # Apply the student discount only to Books.
+        category = str(item.get("category", "")).strip().lower()
+
+        if valid_student and category == "books":
+            final_unit_price = (
+                unit_price * Decimal("0.90")
+            ).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+
+        final_total += final_unit_price * quantity
 
         order_items.append(
             {
                 "product_id": int(item["product_id"]),
                 "quantity": quantity,
-                "price": str(unit_price.quantize(Decimal("0.01"))),
+                "price": str(final_unit_price),
             }
         )
 
-    return order_items
+    subtotal = subtotal.quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+
+    final_total = final_total.quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+
+    student_discount = (subtotal - final_total).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+
+    return {
+        "subtotal": subtotal,
+        "student_discount": student_discount,
+        "total": final_total,
+        "order_items": order_items,
+        "student_discount_applied": student_discount > 0,
+    }
 
 
-def save_checkout_order(user_id: int, total: Decimal):
+def save_checkout_order(
+    user_id: int,
+    total: Decimal,
+    order_items: list[dict],
+):
     """
     Save the completed checkout as an order.
 
     create_order is expected to insert the order and order items,
     decrement inventory, commit the transaction, and return the order ID.
     """
-    order_items = get_order_items_from_cart(user_id)
-
     if not order_items:
         raise HTTPException(
             status_code=400,
@@ -283,15 +366,20 @@ def update_item_quantity(
 
 @app.post("/checkout/{user_id}/cash")
 def cash_checkout(user_id: int, request: CashPaymentRequest):
-    total = get_cart_total(user_id)
+    checkout = calculate_checkout_totals(
+        user_id,
+        request.student_id,
+    )
+
+    total = checkout["total"]
 
     if total <= 0:
         raise HTTPException(
             status_code=400,
-            detail="Cart is empty.",
+            detail="Cart total must be greater than zero.",
         )
 
-    # Validate/process the simulated cash payment first.
+    # Validate/process the simulated cash payment using the final total.
     payment_result = pay_with_cash(total, request.cash_received)
 
     if not payment_result["success"]:
@@ -300,11 +388,18 @@ def cash_checkout(user_id: int, request: CashPaymentRequest):
             detail=payment_result["message"],
         )
 
-    # Save order/receipt and clear cart only after payment succeeds.
-    receipt_id = save_checkout_order(user_id, total)
+    # Save the order using the same discounted prices used for payment.
+    receipt_id = save_checkout_order(
+        user_id,
+        total,
+        checkout["order_items"],
+    )
 
     return {
         "message": payment_result["message"],
+        "subtotal": str(checkout["subtotal"]),
+        "student_discount": str(checkout["student_discount"]),
+        "student_discount_applied": checkout["student_discount_applied"],
         "total": str(total),
         "cash_received": request.cash_received,
         "change": payment_result["change"],
@@ -314,15 +409,20 @@ def cash_checkout(user_id: int, request: CashPaymentRequest):
 
 @app.post("/checkout/{user_id}/card")
 def card_checkout(user_id: int, request: CardPaymentRequest):
-    total = get_cart_total(user_id)
+    checkout = calculate_checkout_totals(
+        user_id,
+        request.student_id,
+    )
+
+    total = checkout["total"]
 
     if total <= 0:
         raise HTTPException(
             status_code=400,
-            detail="Cart is empty.",
+            detail="Cart total must be greater than zero.",
         )
 
-    # Validate/process the simulated card payment first.
+    # Validate/process the simulated card payment using the final total.
     payment_result = pay_with_card(total, request.approved)
 
     if not payment_result["success"]:
@@ -331,11 +431,18 @@ def card_checkout(user_id: int, request: CardPaymentRequest):
             detail=payment_result["message"],
         )
 
-    # Save order/receipt and clear cart only after payment succeeds.
-    receipt_id = save_checkout_order(user_id, total)
+    # Save the order using the same discounted prices used for payment.
+    receipt_id = save_checkout_order(
+        user_id,
+        total,
+        checkout["order_items"],
+    )
 
     return {
         "message": payment_result["message"],
+        "subtotal": str(checkout["subtotal"]),
+        "student_discount": str(checkout["student_discount"]),
+        "student_discount_applied": checkout["student_discount_applied"],
         "total": str(total),
         "receipt_id": receipt_id,
     }

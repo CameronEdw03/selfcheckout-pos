@@ -1,4 +1,3 @@
-# cart.py
 
 from decimal import Decimal
 
@@ -210,7 +209,7 @@ def update_cart_quantity(user_id, product_id, quantity):
 
 
 def get_cart(user_id):
-    """Return cart products with discount and line-total information."""
+    """Return cart products with unit-price and line-total information."""
 
     connection = create_connection()
     if not connection:
@@ -231,17 +230,9 @@ def get_cart(user_id):
                 p.name,
                 p.description,
                 p.price,
-                COALESCE(p.discount_percent, 0) AS discount_percent,
-                ROUND(
-                    p.price * (1 - COALESCE(p.discount_percent, 0) / 100.0),
-                    2
-                ) AS discounted_price,
+                p.price AS discounted_price,
                 p.category,
-                ROUND(
-                    p.price * (1 - COALESCE(p.discount_percent, 0) / 100.0)
-                    * c.quantity,
-                    2
-                ) AS line_total
+                ROUND(p.price * c.quantity, 2) AS line_total
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id
@@ -264,7 +255,7 @@ def get_cart(user_id):
 
 
 def get_cart_total(user_id):
-    """Calculate the cart total using discounted unit prices."""
+    """Calculate the cart total using unit prices."""
 
     cart = get_cart(user_id)
 
@@ -292,7 +283,7 @@ def prepare_receipt_data(user_id):
     total = Decimal("0.00")
 
     for item in cart:
-        unit_price = Decimal(str(item["discounted_price"]))
+        unit_price = Decimal(str(item["price"]))
         quantity = int(item["quantity"])
         line_total = Decimal(str(item["line_total"]))
 
@@ -302,7 +293,6 @@ def prepare_receipt_data(user_id):
                 "name": item["name"],
                 "quantity": quantity,
                 "unit_price": str(unit_price),
-                "discount_percent": str(item["discount_percent"]),
                 "line_total": str(line_total),
             }
         )
