@@ -16,13 +16,39 @@ function normalizeCartResponse(data) {
 }
 
 function getProductPrice(product) {
-  return Number(
-    product?.discounted_price ?? product?.price ?? 0
-  );
+  return Number(product?.discounted_price ?? product?.price ?? 0);
 }
 
 function formatMoney(value) {
   return Number(value || 0).toFixed(2);
+}
+
+function getCourseLabel(course) {
+  const code =
+    course?.course_code ??
+    course?.course_number ??
+    course?.code ??
+    course?.number ??
+    "";
+
+  const name =
+    course?.course_name ??
+    course?.name ??
+    course?.title ??
+    course?.description ??
+    "";
+
+  if (code && name && String(name) !== String(code)) {
+    return `${code} — ${name}`;
+  }
+
+  return String(
+    code || name || `Course ${course?.course_id ?? course?.id ?? ""}`
+  );
+}
+
+function getCourseId(course) {
+  return String(course?.course_id ?? course?.id ?? "");
 }
 
 async function readResponse(response) {
@@ -54,6 +80,8 @@ function ProductCatalog() {
   const navigate = useNavigate();
 
   const [products, setProducts] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [selectedCourseId, setSelectedCourseId] = useState("");
   const [cartItems, setCartItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
 
@@ -65,6 +93,8 @@ function ProductCatalog() {
   const [search, setSearch] = useState("");
 
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const [loadingCourses, setLoadingCourses] = useState(true);
+  const [courseError, setCourseError] = useState("");
   const [loadingCart, setLoadingCart] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
@@ -79,6 +109,7 @@ function ProductCatalog() {
 
   const [receipt, setReceipt] = useState(null);
 
+  // Check the logged-in user.
   useEffect(() => {
     const savedUser = localStorage.getItem("user");
 
@@ -108,6 +139,7 @@ function ProductCatalog() {
     }
   }, [navigate]);
 
+  // Load all store products.
   useEffect(() => {
     let cancelled = false;
 
@@ -120,7 +152,9 @@ function ProductCatalog() {
         const data = await readResponse(response);
 
         if (!Array.isArray(data)) {
-          throw new Error("The products endpoint did not return a product list.");
+          throw new Error(
+            "The products endpoint did not return a product list."
+          );
         }
 
         if (!cancelled) {
@@ -144,6 +178,50 @@ function ProductCatalog() {
     };
   }, []);
 
+  // Load courses. The GET /courses endpoint should return each course
+  // with a products array containing its assigned products.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCourses() {
+      try {
+        setLoadingCourses(true);
+        setCourseError("");
+
+        const response = await fetch(`${API}/courses`);
+        const data = await readResponse(response);
+
+        if (!Array.isArray(data)) {
+          throw new Error(
+            "The courses endpoint did not return a course list."
+          );
+        }
+
+        if (!cancelled) {
+          setCourses(data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setCourseError(
+            err.message ||
+              "Unable to load courses. You can still browse all products."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingCourses(false);
+        }
+      }
+    }
+
+    loadCourses();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Retrieve the current user's cart from FastAPI.
   const refreshCart = useCallback(async () => {
     if (!currentUser?.user_id) {
       setCartItems([]);
@@ -174,6 +252,7 @@ function ProductCatalog() {
     }
   }, [currentUser, refreshCart]);
 
+  // Create the available category buttons from the product catalog.
   const categories = useMemo(() => {
     const uniqueCategories = [
       ...new Set(products.map((product) => product.category).filter(Boolean)),
@@ -182,21 +261,38 @@ function ProductCatalog() {
     return ["All", ...uniqueCategories];
   }, [products]);
 
+  // Find the selected course object.
+  const selectedCourse = useMemo(
+    () => courses.find((course) => getCourseId(course) === selectedCourseId),
+    [courses, selectedCourseId]
+  );
+
+  // When a course is selected, browse only its assigned products.
+  // With no course selected, browse the entire store.
   const filteredProducts = useMemo(() => {
     const searchValue = search.trim().toLowerCase();
 
-    return products.filter((product) => {
+    const productsToBrowse = selectedCourse
+      ? Array.isArray(selectedCourse.products)
+        ? selectedCourse.products
+        : []
+      : products;
+
+    return productsToBrowse.filter((product) => {
       const matchesCategory =
         category === "All" || product.category === category;
 
       const matchesSearch =
         String(product.name ?? "").toLowerCase().includes(searchValue) ||
-        String(product.description ?? "").toLowerCase().includes(searchValue);
+        String(product.description ?? "").toLowerCase().includes(searchValue) ||
+        String(product.category ?? "").toLowerCase().includes(searchValue);
 
       return matchesCategory && matchesSearch;
     });
-  }, [products, category, search]);
+  }, [products, selectedCourse, category, search]);
 
+  // Combine cart data with catalog data so cart lines have product names,
+  // categories, prices, quantities, and totals.
   const cartLines = useMemo(() => {
     return cartItems.map((cartItem) => {
       const productId = getProductId(cartItem);
@@ -218,6 +314,7 @@ function ProductCatalog() {
 
       const quantity = Math.max(1, Number(cartItem.quantity ?? 1));
       const unitPrice = getProductPrice(product);
+
       const lineTotal =
         cartItem.line_total != null
           ? Number(cartItem.line_total)
@@ -242,6 +339,7 @@ function ProductCatalog() {
     0
   );
 
+  // Add a product to the cart.
   async function addToCart(product) {
     if (!currentUser?.user_id) {
       navigate("/login");
@@ -268,6 +366,7 @@ function ProductCatalog() {
     }
   }
 
+  // Remove one product from the cart.
   async function removeFromCart(productId) {
     if (!currentUser?.user_id) return;
 
@@ -286,6 +385,7 @@ function ProductCatalog() {
     }
   }
 
+  // Update a cart item's quantity.
   async function updateQuantity(productId, quantity) {
     if (!currentUser?.user_id) return;
 
@@ -317,6 +417,7 @@ function ProductCatalog() {
     }
   }
 
+  // Clear the cart.
   async function removeAllFromCart() {
     if (!currentUser?.user_id) return;
 
@@ -343,6 +444,7 @@ function ProductCatalog() {
     setIsCheckoutOpen(true);
   }
 
+  // Submit checkout to the FastAPI backend.
   async function completeCheckout(event) {
     event.preventDefault();
 
@@ -445,6 +547,7 @@ function ProductCatalog() {
     }
   }
 
+  // Prepare an SMS message with the receipt.
   function textReceipt() {
     const phone = receiptPhone.trim();
 
@@ -739,6 +842,81 @@ function ProductCatalog() {
           </div>
         )}
 
+        {/* Browse all store products or narrow the catalog to a course. */}
+        <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-lg font-black text-blue-950">
+                Find supplies by course
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Choose a course to see the products assigned to it.
+              </p>
+            </div>
+
+            <div className="w-full md:max-w-md">
+              <label
+                htmlFor="courseSelect"
+                className="mb-2 block text-sm font-bold text-slate-700"
+              >
+                Course
+              </label>
+              <select
+                id="courseSelect"
+                value={selectedCourseId}
+                onChange={(event) => {
+                  setSelectedCourseId(event.target.value);
+                  setCategory("All");
+                }}
+                disabled={loadingCourses || courses.length === 0}
+                className="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">
+                  {loadingCourses
+                    ? "Loading courses..."
+                    : courses.length === 0
+                    ? "No courses available"
+                    : "All store products"}
+                </option>
+                {courses.map((course) => (
+                  <option key={getCourseId(course)} value={getCourseId(course)}>
+                    {getCourseLabel(course)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {courseError && (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {courseError}
+            </p>
+          )}
+
+          {selectedCourse && (
+            <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3">
+              <p className="font-bold text-blue-950">
+                {getCourseLabel(selectedCourse)}
+              </p>
+              {selectedCourse.description &&
+                selectedCourse.description !== selectedCourse.course_name && (
+                  <p className="mt-1 text-sm text-blue-800">
+                    {selectedCourse.description}
+                  </p>
+                )}
+              <p className="mt-1 text-xs font-semibold text-blue-700">
+                {Array.isArray(selectedCourse.products)
+                  ? selectedCourse.products.length
+                  : 0}{" "}
+                assigned{" "}
+                {(selectedCourse.products?.length ?? 0) === 1
+                  ? "product"
+                  : "products"}
+              </p>
+            </div>
+          )}
+        </section>
+
         <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex gap-2 overflow-x-auto">
             {categories.map((item) => (
@@ -761,10 +939,12 @@ function ProductCatalog() {
         <div className="mb-5 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-black text-slate-900">
-              Available Items
+              {selectedCourse ? "Products for this Course" : "Available Items"}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Select a product to add it to your cart.
+              {selectedCourse
+                ? "These are the products assigned to the selected course."
+                : "Select a product to add it to your cart."}
             </p>
           </div>
           <p className="text-sm font-bold text-slate-500">
@@ -779,7 +959,9 @@ function ProductCatalog() {
               No items found
             </h3>
             <p className="mt-2 text-sm text-slate-500">
-              Try another search or category.
+              {selectedCourse
+                ? "This course has no assigned products matching your search or category. Try clearing your search, choosing another category, or selecting a different course."
+                : "Try another search or category."}
             </p>
           </div>
         ) : (

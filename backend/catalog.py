@@ -241,3 +241,76 @@ def deduct_inventory(product_id, quantity):
         if cursor:
             cursor.close()
         connection.close()
+#look up an item based on the course number 
+def get_all_courses_with_products():
+    """Retrieve all courses and their associated products."""
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                c.course_id,
+                c.course_number,
+                c.course_name,
+                p.product_id,
+                p.name AS product_name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                cp.required
+            FROM courses c
+            LEFT JOIN course_products cp
+                ON c.course_id = cp.course_id
+            LEFT JOIN products p
+                ON cp.product_id = p.product_id
+            ORDER BY c.course_number, p.name
+        """
+
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        courses = {}
+
+        for row in rows:
+            course_id = row["course_id"]
+
+            if course_id not in courses:
+                courses[course_id] = {
+                    "course_id": course_id,
+                    "course_number": row["course_number"],
+                    "course_name": row["course_name"],
+                    "products": []
+                }
+
+            
+            if row["product_id"] is not None:
+                courses[course_id]["products"].append({
+                    "product_id": row["product_id"],
+                    "name": row["product_name"],
+                    "description": row["description"],
+                    "price": float(row["price"]),
+                    "quantity": row["quantity"],
+                    "category": row["category"],
+                    "is_tax_exempt": row["is_tax_exempt"],
+                    "required": bool(row["required"])
+                })
+
+        return list(courses.values())
+
+    except Exception as error:
+        print(f"Error retrieving courses and products: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
