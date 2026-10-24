@@ -1,3 +1,4 @@
+
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import FastAPI, HTTPException
@@ -24,6 +25,7 @@ from catalog import (
     edit_product,
     apply_low_stock_discount,
     remove_product,
+    get_all_courses_with_products,  
 )
 from payment import pay_with_cash, pay_with_card
 from receipt import create_order
@@ -101,6 +103,10 @@ class CardPaymentRequest(BaseModel):
     approved: bool
     student_id: str | None = None
 
+class CourseProductAssignmentRequest(BaseModel):
+    user_name: str
+    password: str
+    required: bool = False
 
 # -------------------------
 # Checkout / receipt helpers
@@ -613,6 +619,17 @@ def discount_product(product_id: int, request: ProductDiscountRequest):
 
 
 # -------------------------
+# Course listing routes
+# -------------------------
+
+@app.get("/courses")
+def get_courses_with_products_endpoint():
+    """Return all courses and their associated products."""
+    courses = get_all_courses_with_products()
+    return courses
+
+
+# -------------------------
 # Product listing routes
 # -------------------------
 
@@ -701,3 +718,229 @@ def get_products_grouped_by_category_api(request: ProductRequest):
     return {
         "categories": products,
     }
+
+# -------------------------
+# Course / product assignment routes
+# -------------------------
+
+@app.get("/courses")
+def get_courses_with_products_endpoint():
+    """Return courses with the products currently assigned to each course."""
+    courses = get_all_courses_with_products()
+
+    if courses is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving courses",
+        )
+
+    return courses
+
+
+def _verify_course_assignment_manager(user_name: str, password: str):
+    """Verify that the request was made by a manager."""
+    manager = get_user(user_name)
+
+    if not manager or manager.get("password") != password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager.get("role") != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can assign products to courses",
+        )
+
+    return manager
+
+
+@app.post("/courses/{course_id}/products/{product_id}")
+def assign_product_to_course(
+    course_id: int,
+    product_id: int,
+    request: CourseProductAssignmentRequest,
+):
+    """Assign a product to a course, or update its required status."""
+    _verify_course_assignment_manager(request.user_name, request.password)
+
+    connection = None
+    cursor = None
+
+    try:
+        from connection import create_connection
+
+        connection = create_connection()
+
+        if connection is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection failed",
+            )
+
+        cursor = connection.cursor(dictionary=True)
+
+        # Confirm the course exists.
+        cursor.execute(
+            "SELECT course_id FROM courses WHERE course_id = %s",
+            (course_id,),
+        )
+
+        if cursor.fetchone() is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Course not found",
+            )
+
+        # Confirm the product exists.
+        cursor.execute(
+            "SELECT product_id FROM products WHERE product_id = %s",
+            (product_id,),
+        )
+
+        if cursor.fetchone() is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Product not found",
+            )
+
+        # Check whether this product is already assigned to this course.
+        cursor.execute(
+            """
+            SELECT course_id, product_id
+            FROM course_products
+            WHERE course_id = %s AND product_id = %s
+            """,
+            (course_id, product_id),
+        )
+
+        already_assigned = cursor.fetchone()
+
+        if already_assigned:
+            # Update the required flag if the association already exists.
+            cursor.execute(
+                """
+                UPDATE course_products
+                SET required = %s
+                WHERE course_id = %s AND product_id = %s
+                """,
+                (request.required, course_id, product_id),
+            )
+
+            message = "Course product assignment updated"
+
+        else:
+            # Create a new course/product association.
+            cursor.execute(
+                """
+                INSERT INTO course_products
+                    (course_id, product_id, required)
+                VALUES (%s, %s, %s)
+                """,
+                (course_id, product_id, request.required),
+            )
+
+            message = "Product assigned to course successfully"
+
+        connection.commit()
+
+        return {
+            "message": message,
+            "course_id": course_id,
+            "product_id": product_id,
+            "required": request.required,
+        }
+
+    except HTTPException:
+        if connection is not None:
+            connection.rollback()
+        raise
+
+    except Exception as error:
+        if connection is not None:
+            connection.rollback()
+
+        print(f"Error assigning product to course: {error}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to assign product to course",
+        )
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
+
+
+@app.delete("/courses/{course_id}/products/{product_id}")
+def remove_product_from_course(
+    course_id: int,
+    product_id: int,
+    request: CourseProductAssignmentRequest,
+):
+    """Remove a product from a course; this does not delete the product."""
+    _verify_course_assignment_manager(request.user_name, request.password)
+
+    connection = None
+    cursor = None
+
+    try:
+        from connection import create_connection
+
+        connection = create_connection()
+
+        if connection is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection failed",
+            )
+
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            DELETE FROM course_products
+            WHERE course_id = %s AND product_id = %s
+            """,
+            (course_id, product_id),
+        )
+
+        deleted = cursor.rowcount
+        connection.commit()
+
+        if deleted == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="That product is not assigned to this course",
+            )
+
+        return {
+            "message": "Product removed from course successfully"
+        }
+
+    except HTTPException:
+        if connection is not None:
+            connection.rollback()
+        raise
+
+    except Exception as error:
+        if connection is not None:
+            connection.rollback()
+
+        print(f"Error removing product from course: {error}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to remove product from course",
+        )
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
