@@ -314,3 +314,119 @@ def get_all_courses_with_products():
         if cursor:
             cursor.close()
         connection.close()
+
+
+
+def get_all_products_with_color():
+    """Get all products with color assigned to them."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.price,
+                p.quantity,
+                c.color_name
+            FROM products p
+            JOIN product_colors pc
+                ON p.product_id = pc.product_id
+            JOIN colors c
+                ON pc.color_id = c.color_id
+            WHERE p.product_id BETWEEN 9001 AND 9005
+            ORDER BY p.product_id, c.color_name;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving products with colors: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+def get_all_colors():
+    """Retrieve all available colors."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT color_id, color_name, hex_code
+            FROM colors
+            ORDER BY color_name;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving colors: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+def get_product_by_id_with_color(product_id):
+    """Retrieve a product by ID with its assigned color(s)."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.price,
+                p.quantity,
+                c.color_id,
+                c.color_name,
+                c.hex_code
+            FROM products p
+            JOIN product_colors pc
+                ON p.product_id = pc.product_id
+            JOIN colors c
+                ON pc.color_id = c.color_id
+            WHERE p.product_id = %s
+            ORDER BY c.color_name;
+        """
+
+        cursor.execute(query, (product_id,))
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving product by ID with color: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()

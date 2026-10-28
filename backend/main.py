@@ -26,6 +26,9 @@ from catalog import (
     apply_low_stock_discount,
     remove_product,
     get_all_courses_with_products,  
+    get_all_products_with_color,
+    get_all_colors,
+    get_product_by_id_with_color
 )
 from payment import pay_with_cash, pay_with_card
 from receipt import create_order
@@ -944,3 +947,25 @@ def remove_product_from_course(
 
         if connection is not None:
             connection.close()
+#gets all available colors 
+@app.get("/colors")
+def get_colors():
+    return get_all_colors()
+
+#gets all colors assigned to a product 
+@app.get("/products/with-colors")
+def get_product_color():
+    return get_all_courses_with_products()
+
+#gets a product assigned to a color 
+def read_product_by_id_with_color(product_id: int):
+    product = get_product_by_id_with_color(product_id)
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or no colors assigned"
+
+        )
+    return product
+
