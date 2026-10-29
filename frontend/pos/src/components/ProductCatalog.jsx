@@ -7,6 +7,77 @@ function getProductId(item) {
   return Number(item?.product_id ?? item?.id);
 }
 
+// Convert the rows returned by /products/with-colors into one product per card.
+// The endpoint may return one row per product/color pair or products with a
+// nested colors array; this handles both response shapes.
+function groupProductsWithColors(rows) {
+  const grouped = new Map();
+
+  for (const row of rows) {
+    const product = row?.product ?? row;
+    const productId = getProductId(product);
+
+    if (!Number.isFinite(productId)) continue;
+
+    if (!grouped.has(productId)) {
+      grouped.set(productId, {
+        ...product,
+        product_id: productId,
+        colors: Array.isArray(product.colors) ? [...product.colors] : [],
+      });
+    }
+
+    const existing = grouped.get(productId);
+    const rowColor =
+      row?.color ??
+      (row?.color_id != null || row?.color_name
+        ? {
+            color_id: row.color_id,
+            color_name: row.color_name ?? row.name_color ?? row.color,
+            hex_code: row.hex_code ?? row.color_hex ?? row.color_code,
+          }
+        : null);
+
+    if (rowColor && (rowColor.color_id != null || rowColor.color_name)) {
+      const alreadyAdded = existing.colors.some(
+        (color) =>
+          String(color.color_id ?? color.id ?? color.color_name) ===
+          String(rowColor.color_id ?? rowColor.id ?? rowColor.color_name)
+      );
+
+      if (!alreadyAdded) existing.colors.push(rowColor);
+    }
+
+    if (Array.isArray(row?.colors)) {
+      for (const color of row.colors) {
+        const alreadyAdded = existing.colors.some(
+          (item) =>
+            String(item.color_id ?? item.id ?? item.color_name) ===
+            String(color.color_id ?? color.id ?? color.color_name)
+        );
+        if (!alreadyAdded) existing.colors.push(color);
+      }
+    }
+  }
+
+  return [...grouped.values()];
+}
+
+function getColorId(color) {
+  return color?.color_id ?? color?.id ?? color?.colorId ?? "";
+}
+
+function getColorName(color) {
+  return color?.color_name ?? color?.name ?? color?.color ?? "Color";
+}
+
+function getColorHex(color) {
+  const value = color?.hex_code ?? color?.hex ?? color?.color_code;
+  return typeof value === "string" && /^#[0-9A-Fa-f]{6}$/.test(value)
+    ? value
+    : "#94A3B8";
+}
+
 function normalizeCartResponse(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.cart)) return data.cart;
@@ -80,6 +151,7 @@ function ProductCatalog() {
   const navigate = useNavigate();
 
   const [products, setProducts] = useState([]);
+  const [selectedColors, setSelectedColors] = useState({});
   const [courses, setCourses] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [cartItems, setCartItems] = useState([]);
@@ -139,7 +211,7 @@ function ProductCatalog() {
     }
   }, [navigate]);
 
-  // Load all store products.
+  // Load all store products and their available colors.
   useEffect(() => {
     let cancelled = false;
 
@@ -148,17 +220,42 @@ function ProductCatalog() {
         setLoadingProducts(true);
         setError("");
 
-        const response = await fetch(`${API}/products`);
-        const data = await readResponse(response);
+        // Load the regular catalog first so products without assigned colors
+        // still appear in the store.
+        const productResponse = await fetch(`${API}/products`);
+        const baseProducts = await readResponse(productResponse);
 
-        if (!Array.isArray(data)) {
-          throw new Error(
-            "The products endpoint did not return a product list."
-          );
+        if (!Array.isArray(baseProducts)) {
+          throw new Error("The products endpoint did not return a product list.");
         }
 
+        let productsWithColors = [];
+        try {
+          const colorResponse = await fetch(`${API}/products/with-colors`);
+          const colorRows = await readResponse(colorResponse);
+
+          if (Array.isArray(colorRows)) {
+            productsWithColors = groupProductsWithColors(colorRows);
+          }
+        } catch {
+          // Keep the regular product catalog available if colors cannot load.
+        }
+
+        const productsById = new Map(
+          productsWithColors.map((product) => [getProductId(product), product])
+        );
+
+        const mergedProducts = baseProducts.map((product) => {
+          const colorProduct = productsById.get(getProductId(product));
+
+          return {
+            ...product,
+            colors: colorProduct?.colors ?? product.colors ?? [],
+          };
+        });
+
         if (!cancelled) {
-          setProducts(data);
+          setProducts(mergedProducts);
         }
       } catch (err) {
         if (!cancelled) {
@@ -278,17 +375,33 @@ function ProductCatalog() {
         : []
       : products;
 
-    return productsToBrowse.filter((product) => {
-      const matchesCategory =
-        category === "All" || product.category === category;
+    return productsToBrowse
+      .map((product) => {
+        const fullProduct = products.find(
+          (item) => getProductId(item) === getProductId(product)
+        );
 
-      const matchesSearch =
-        String(product.name ?? "").toLowerCase().includes(searchValue) ||
-        String(product.description ?? "").toLowerCase().includes(searchValue) ||
-        String(product.category ?? "").toLowerCase().includes(searchValue);
+        return {
+          ...(fullProduct ?? {}),
+          ...product,
+          product_id: getProductId(product),
+          colors:
+            Array.isArray(product.colors) && product.colors.length > 0
+              ? product.colors
+              : fullProduct?.colors ?? [],
+        };
+      })
+      .filter((product) => {
+        const matchesCategory =
+          category === "All" || product.category === category;
 
-      return matchesCategory && matchesSearch;
-    });
+        const matchesSearch =
+          String(product.name ?? "").toLowerCase().includes(searchValue) ||
+          String(product.description ?? "").toLowerCase().includes(searchValue) ||
+          String(product.category ?? "").toLowerCase().includes(searchValue);
+
+        return matchesCategory && matchesSearch;
+      });
   }, [products, selectedCourse, category, search]);
 
   // Combine cart data with catalog data so cart lines have product names,
@@ -355,6 +468,9 @@ function ProductCatalog() {
       url.searchParams.set("user_id", String(currentUser.user_id));
       url.searchParams.set("product_id", String(product.product_id));
 
+      // The current cart API accepts only user_id and product_id. The
+      // selected color is shown in the catalog, but is not persisted in the
+      // cart until the backend cart/order schema supports color_id.
       const response = await fetch(url.toString(), {
         method: "POST",
       });
@@ -975,6 +1091,15 @@ function ProductCatalog() {
                 selectedCartItem?.quantity ?? 0
               );
               const outOfStock = Number(product.quantity) <= 0;
+              const productColors = Array.isArray(product.colors)
+                ? product.colors
+                : [];
+              const selectedColorId =
+                selectedColors[productId] ??
+                (productColors.length > 0 ? getColorId(productColors[0]) : "");
+              const selectedColor = productColors.find(
+                (color) => String(getColorId(color)) === String(selectedColorId)
+              );
 
               return (
                 <article
@@ -1019,6 +1144,53 @@ function ProductCatalog() {
                     <p className="mt-2 min-h-10 text-sm leading-5 text-slate-500">
                       {product.description}
                     </p>
+
+                    {productColors.length > 0 && (
+                      <div className="mt-4">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold uppercase tracking-wide text-slate-600">
+                            Choose a color
+                          </span>
+                          <span className="text-xs font-semibold text-blue-900">
+                            {selectedColor ? getColorName(selectedColor) : ""}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {productColors.map((color, index) => {
+                            const colorId = getColorId(color);
+                            const isSelected =
+                              String(colorId) === String(selectedColorId);
+
+                            return (
+                              <button
+                                key={colorId || `${productId}-color-${index}`}
+                                type="button"
+                                onClick={() =>
+                                  setSelectedColors((previous) => ({
+                                    ...previous,
+                                    [productId]: colorId,
+                                  }))
+                                }
+                                title={getColorName(color)}
+                                aria-label={`Select ${getColorName(color)} for ${product.name}`}
+                                aria-pressed={isSelected}
+                                className={`flex h-9 w-9 items-center justify-center rounded-full border-2 transition ${
+                                  isSelected
+                                    ? "border-blue-900 ring-2 ring-blue-200 ring-offset-2"
+                                    : "border-slate-300 hover:border-blue-500"
+                                }`}
+                              >
+                                <span
+                                  className="h-6 w-6 rounded-full border border-black/10"
+                                  style={{ backgroundColor: getColorHex(color) }}
+                                />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
                       <span className="text-xl font-black text-blue-950">

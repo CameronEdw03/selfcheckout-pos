@@ -97,6 +97,7 @@ def edit_product(product_id, name, description, price, quantity, category):
             cursor.close()
         connection.close()
 
+
 def apply_low_stock_discount(product_id, discount_percent=5):
     """Apply the fixed discount only when a product is below the stock threshold."""
     connection = create_connection()
@@ -105,8 +106,10 @@ def apply_low_stock_discount(product_id, discount_percent=5):
         return "unavailable"
 
     cursor = None
+
     try:
         cursor = connection.cursor()
+
         cursor.execute(
             """
             UPDATE products
@@ -117,6 +120,7 @@ def apply_low_stock_discount(product_id, discount_percent=5):
             """,
             (discount_percent, product_id)
         )
+
         connection.commit()
 
         if cursor.rowcount > 0:
@@ -126,16 +130,21 @@ def apply_low_stock_discount(product_id, discount_percent=5):
             "SELECT quantity, discount_percent FROM products WHERE product_id = %s",
             (product_id,)
         )
+
         product = cursor.fetchone()
 
         if not product:
             return "not_found"
+
         if product[0] >= 5:
             return "stock_not_eligible"
+
         return "already_discounted"
+
     except Exception as error:
         print(f"Error applying product discount: {error}")
         return "unavailable"
+
     finally:
         if cursor:
             cursor.close()
@@ -241,7 +250,9 @@ def deduct_inventory(product_id, quantity):
         if cursor:
             cursor.close()
         connection.close()
-#look up an item based on the course number 
+
+
+# Look up an item based on the course number.
 def get_all_courses_with_products():
     """Retrieve all courses and their associated products."""
     connection = create_connection()
@@ -291,7 +302,6 @@ def get_all_courses_with_products():
                     "products": []
                 }
 
-            
             if row["product_id"] is not None:
                 courses[course_id]["products"].append({
                     "product_id": row["product_id"],
@@ -316,9 +326,8 @@ def get_all_courses_with_products():
         connection.close()
 
 
-
 def get_all_products_with_color():
-    """Get all products with color assigned to them."""
+    """Retrieve all products with their assigned colors."""
 
     connection = create_connection()
 
@@ -334,15 +343,19 @@ def get_all_products_with_color():
             SELECT
                 p.product_id,
                 p.name,
+                p.description,
                 p.price,
                 p.quantity,
-                c.color_name
+                p.category,
+                p.is_tax_exempt,
+                c.color_id,
+                c.color_name,
+                c.hex_code
             FROM products p
-            JOIN product_colors pc
+            INNER JOIN product_colors pc
                 ON p.product_id = pc.product_id
-            JOIN colors c
+            INNER JOIN colors c
                 ON pc.color_id = c.color_id
-            WHERE p.product_id BETWEEN 9001 AND 9005
             ORDER BY p.product_id, c.color_name;
         """
 
@@ -357,6 +370,8 @@ def get_all_products_with_color():
         if cursor:
             cursor.close()
         connection.close()
+
+
 def get_all_colors():
     """Retrieve all available colors."""
 
@@ -371,7 +386,10 @@ def get_all_colors():
         cursor = connection.cursor(dictionary=True)
 
         query = """
-            SELECT color_id, color_name, hex_code
+            SELECT
+                color_id,
+                color_name,
+                hex_code
             FROM colors
             ORDER BY color_name;
         """
@@ -387,6 +405,7 @@ def get_all_colors():
         if cursor:
             cursor.close()
         connection.close()
+
 
 def get_product_by_id_with_color(product_id):
     """Retrieve a product by ID with its assigned color(s)."""
@@ -405,15 +424,18 @@ def get_product_by_id_with_color(product_id):
             SELECT
                 p.product_id,
                 p.name,
+                p.description,
                 p.price,
                 p.quantity,
+                p.category,
+                p.is_tax_exempt,
                 c.color_id,
                 c.color_name,
                 c.hex_code
             FROM products p
-            JOIN product_colors pc
+            INNER JOIN product_colors pc
                 ON p.product_id = pc.product_id
-            JOIN colors c
+            INNER JOIN colors c
                 ON pc.color_id = c.color_id
             WHERE p.product_id = %s
             ORDER BY c.color_name;

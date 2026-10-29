@@ -955,9 +955,10 @@ def get_colors():
 #gets all colors assigned to a product 
 @app.get("/products/with-colors")
 def get_product_color():
-    return get_all_courses_with_products()
+    return get_all_products_with_color()
 
 #gets a product assigned to a color 
+@app.get("/products/{product_id}/colors")
 def read_product_by_id_with_color(product_id: int):
     product = get_product_by_id_with_color(product_id)
 
