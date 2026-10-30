@@ -78,6 +78,35 @@ function getColorHex(color) {
     : "#94A3B8";
 }
 
+// Convert the rows returned by /products/with-sizes into a map of
+// product_id -> sizes array (already ordered S, M, L, XL, XXL by the backend).
+function groupSizesByProduct(rows) {
+  const grouped = new Map();
+
+  for (const row of rows) {
+    const productId = getProductId(row);
+
+    if (!Number.isFinite(productId) || row?.size_id == null) continue;
+
+    if (!grouped.has(productId)) grouped.set(productId, []);
+
+    const sizes = grouped.get(productId);
+    if (!sizes.some((size) => size.size_id === row.size_id)) {
+      sizes.push({ size_id: row.size_id, size_name: row.size_name });
+    }
+  }
+
+  return grouped;
+}
+
+function getSizeId(size) {
+  return size?.size_id ?? size?.id ?? "";
+}
+
+function getSizeName(size) {
+  return size?.size_name ?? size?.name ?? "Size";
+}
+
 function normalizeCartResponse(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.cart)) return data.cart;
@@ -152,6 +181,8 @@ function ProductCatalog() {
 
   const [products, setProducts] = useState([]);
   const [selectedColors, setSelectedColors] = useState({});
+  const [sizePickerProduct, setSizePickerProduct] = useState(null);
+  const [pendingSizeId, setPendingSizeId] = useState("");
   const [courses, setCourses] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [cartItems, setCartItems] = useState([]);
@@ -241,6 +272,18 @@ function ProductCatalog() {
           // Keep the regular product catalog available if colors cannot load.
         }
 
+        let sizesByProduct = new Map();
+        try {
+          const sizeResponse = await fetch(`${API}/products/with-sizes`);
+          const sizeRows = await readResponse(sizeResponse);
+
+          if (Array.isArray(sizeRows)) {
+            sizesByProduct = groupSizesByProduct(sizeRows);
+          }
+        } catch {
+          // Keep the regular product catalog available if sizes cannot load.
+        }
+
         const productsById = new Map(
           productsWithColors.map((product) => [getProductId(product), product])
         );
@@ -251,6 +294,7 @@ function ProductCatalog() {
           return {
             ...product,
             colors: colorProduct?.colors ?? product.colors ?? [],
+            sizes: sizesByProduct.get(getProductId(product)) ?? product.sizes ?? [],
           };
         });
 
@@ -389,6 +433,10 @@ function ProductCatalog() {
             Array.isArray(product.colors) && product.colors.length > 0
               ? product.colors
               : fullProduct?.colors ?? [],
+          sizes:
+            Array.isArray(product.sizes) && product.sizes.length > 0
+              ? product.sizes
+              : fullProduct?.sizes ?? [],
         };
       })
       .filter((product) => {
@@ -469,8 +517,8 @@ function ProductCatalog() {
       url.searchParams.set("product_id", String(product.product_id));
 
       // The current cart API accepts only user_id and product_id. The
-      // selected color is shown in the catalog, but is not persisted in the
-      // cart until the backend cart/order schema supports color_id.
+      // selected color and size are shown in the catalog, but are not
+      // persisted in the cart until the cart/order schema supports them.
       const response = await fetch(url.toString(), {
         method: "POST",
       });
@@ -1100,6 +1148,8 @@ function ProductCatalog() {
               const selectedColor = productColors.find(
                 (color) => String(getColorId(color)) === String(selectedColorId)
               );
+              const hasSizes =
+                Array.isArray(product.sizes) && product.sizes.length > 0;
 
               return (
                 <article
@@ -1200,7 +1250,15 @@ function ProductCatalog() {
                       <button
                         type="button"
                         disabled={outOfStock || loadingCart}
-                        onClick={() => addToCart(product)}
+                        onClick={() => {
+                          if (hasSizes) {
+                            // Clothing: ask for a size before adding.
+                            setPendingSizeId("");
+                            setSizePickerProduct(product);
+                          } else {
+                            addToCart(product);
+                          }
+                        }}
                         className={`rounded-lg px-4 py-2 text-sm font-black transition ${
                           outOfStock || loadingCart
                             ? "cursor-not-allowed bg-slate-100 text-slate-400"
@@ -1240,6 +1298,72 @@ function ProductCatalog() {
             >
               View Cart ({cartCount})
             </button>
+          </div>
+        </div>
+      )}
+
+      {sizePickerProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="bg-blue-950 px-6 py-5 text-white">
+              <h2 className="text-xl font-black">Select a Size</h2>
+              <p className="mt-1 text-sm text-blue-200">
+                {sizePickerProduct.name} — $
+                {formatMoney(getProductPrice(sizePickerProduct))}
+              </p>
+            </div>
+
+            <div className="space-y-5 p-6">
+              <div>
+                <label className="mb-2 block text-sm font-bold text-slate-700">
+                  Size
+                </label>
+                <div className="grid grid-cols-5 gap-2">
+                  {sizePickerProduct.sizes.map((size, index) => {
+                    const sizeId = getSizeId(size);
+                    const isSelected = String(sizeId) === String(pendingSizeId);
+
+                    return (
+                      <button
+                        key={sizeId || `size-${index}`}
+                        type="button"
+                        onClick={() => setPendingSizeId(sizeId)}
+                        aria-pressed={isSelected}
+                        className={`rounded-lg border px-2 py-3 text-sm font-bold transition ${
+                          isSelected
+                            ? "border-blue-900 bg-blue-50 text-blue-950"
+                            : "border-slate-200 text-slate-600 hover:border-blue-400 hover:bg-blue-50"
+                        }`}
+                      >
+                        {getSizeName(size)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSizePickerProduct(null)}
+                  className="flex-1 rounded-lg border border-slate-300 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={pendingSizeId === "" || loadingCart}
+                  onClick={async () => {
+                    const product = sizePickerProduct;
+                    setSizePickerProduct(null);
+                    await addToCart(product);
+                  }}
+                  className="flex-1 rounded-lg bg-red-600 px-4 py-3 text-sm font-black text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {pendingSizeId === "" ? "Choose a size" : "Add to Cart"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

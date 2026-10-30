@@ -452,3 +452,131 @@ def get_product_by_id_with_color(product_id):
         if cursor:
             cursor.close()
         connection.close()
+
+
+def get_all_products_with_size():
+    """Retrieve all products with their assigned sizes."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                s.size_id,
+                s.size_name,
+                s.sort_order
+            FROM products p
+            INNER JOIN product_sizes ps
+                ON p.product_id = ps.product_id
+            INNER JOIN sizes s
+                ON ps.size_id = s.size_id
+            ORDER BY p.product_id, s.sort_order;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving products with sizes: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_all_sizes():
+    """Retrieve all available sizes."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                size_id,
+                size_name,
+                sort_order
+            FROM sizes
+            ORDER BY sort_order;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving sizes: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_product_by_id_with_size(product_id):
+    """Retrieve a product by ID with its assigned size(s)."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                s.size_id,
+                s.size_name,
+                s.sort_order
+            FROM products p
+            INNER JOIN product_sizes ps
+                ON p.product_id = ps.product_id
+            INNER JOIN sizes s
+                ON ps.size_id = s.size_id
+            WHERE p.product_id = %s
+            ORDER BY s.sort_order;
+        """
+
+        cursor.execute(query, (product_id,))
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving product by ID with size: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()

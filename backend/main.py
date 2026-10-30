@@ -28,7 +28,10 @@ from catalog import (
     get_all_courses_with_products,  
     get_all_products_with_color,
     get_all_colors,
-    get_product_by_id_with_color
+    get_product_by_id_with_color,
+    get_all_products_with_size,
+    get_all_sizes,
+    get_product_by_id_with_size,
 )
 from payment import pay_with_cash, pay_with_card
 from receipt import create_order
@@ -970,3 +973,25 @@ def read_product_by_id_with_color(product_id: int):
         )
     return product
 
+
+#gets all available sizes
+@app.get("/sizes")
+def get_sizes():
+    return get_all_sizes()
+
+#gets all sizes assigned to a product
+@app.get("/products/with-sizes")
+def get_product_size():
+    return get_all_products_with_size()
+
+#gets a product with its assigned sizes
+@app.get("/products/{product_id}/sizes")
+def read_product_by_id_with_size(product_id: int):
+    product = get_product_by_id_with_size(product_id)
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or no sizes assigned"
+        )
+    return product
