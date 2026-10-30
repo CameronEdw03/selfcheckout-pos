@@ -26,6 +26,12 @@ from catalog import (
     apply_low_stock_discount,
     remove_product,
     get_all_courses_with_products,  
+    get_all_products_with_color,
+    get_all_colors,
+    get_product_by_id_with_color,
+    get_all_products_with_size,
+    get_all_sizes,
+    get_product_by_id_with_size,
 )
 from payment import pay_with_cash, pay_with_card
 from receipt import create_order
@@ -944,3 +950,48 @@ def remove_product_from_course(
 
         if connection is not None:
             connection.close()
+#gets all available colors 
+@app.get("/colors")
+def get_colors():
+    return get_all_colors()
+
+#gets all colors assigned to a product 
+@app.get("/products/with-colors")
+def get_product_color():
+    return get_all_products_with_color()
+
+#gets a product assigned to a color 
+@app.get("/products/{product_id}/colors")
+def read_product_by_id_with_color(product_id: int):
+    product = get_product_by_id_with_color(product_id)
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or no colors assigned"
+
+        )
+    return product
+
+
+#gets all available sizes
+@app.get("/sizes")
+def get_sizes():
+    return get_all_sizes()
+
+#gets all sizes assigned to a product
+@app.get("/products/with-sizes")
+def get_product_size():
+    return get_all_products_with_size()
+
+#gets a product with its assigned sizes
+@app.get("/products/{product_id}/sizes")
+def read_product_by_id_with_size(product_id: int):
+    product = get_product_by_id_with_size(product_id)
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or no sizes assigned"
+        )
+    return product
