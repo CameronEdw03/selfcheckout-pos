@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
+
 from cart import (
     add_to_cart,
     get_cart,
@@ -12,7 +13,9 @@ from cart import (
     clear_cart,
     get_cart_total,
     update_cart_quantity,
+    add_course_bundle_to_cart,
 )
+
 from user import (
     get_products_by_category,
     get_products_grouped_by_category,
@@ -322,6 +325,12 @@ def student(student_id: str):
 @app.post("/cart")
 def add_item(user_id: int, product_id: int):
     return add_to_cart(user_id, product_id)
+
+
+@app.post("/cart/{user_id}/courses/{course_id}")
+def add_course_bundle(user_id: int, course_id: int):
+    return add_course_bundle_to_cart(user_id, course_id)
+
 
 
 @app.get("/cart/{user_id}")

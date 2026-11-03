@@ -318,3 +318,155 @@ def save_order(user_id):
         return None
 
     return receipt_data
+
+from decimal import Decimal
+
+from connection import create_connection
+
+
+def add_course_bundle_to_cart(user_id, course_id):
+    """Add available course products to the cart and report unavailable items."""
+
+    connection = create_connection()
+
+    if not connection:
+        return {
+            "success": False,
+            "message": "Database connection failed",
+            "added": [],
+            "unavailable": []
+        }
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        # Find products assigned to the selected course.
+        cursor.execute(
+            """
+            SELECT p.product_id, p.name, p.quantity
+            FROM course_products AS cp
+            JOIN products AS p
+                ON cp.product_id = p.product_id
+            WHERE cp.course_id = %s
+            ORDER BY p.product_id
+            """,
+            (course_id,)
+        )
+
+        products = cursor.fetchall()
+
+        added = []
+        unavailable = []
+
+        if not products:
+            return {
+                "success": False,
+                "message": "No products found for this course",
+                "added": [],
+                "unavailable": []
+            }
+
+        # Process every product in the course bundle.
+        for product in products:
+            product_id = product["product_id"]
+            product_name = product["name"]
+
+            # Lock the product row while checking its stock.
+            cursor.execute(
+                """
+                SELECT quantity
+                FROM products
+                WHERE product_id = %s
+                FOR UPDATE
+                """,
+                (product_id,)
+            )
+
+            stock = cursor.fetchone()
+
+            if stock is None:
+                unavailable.append(product_name)
+                continue
+
+            stock_quantity = stock["quantity"]
+
+            # Check whether this product is already in the cart.
+            cursor.execute(
+                """
+                SELECT cart_item_id, quantity
+                FROM cart_items
+                WHERE user_id = %s AND product_id = %s
+                """,
+                (user_id, product_id)
+            )
+
+            cart_item = cursor.fetchone()
+
+            current_quantity = (
+                cart_item["quantity"] if cart_item else 0
+            )
+
+            # Skip products without enough available stock.
+            if current_quantity + 1 > stock_quantity:
+                unavailable.append(product_name)
+                continue
+
+            if cart_item:
+                # Increase quantity if the product is already in the cart.
+                cursor.execute(
+                    """
+                    UPDATE cart_items
+                    SET quantity = quantity + 1
+                    WHERE cart_item_id = %s
+                    """,
+                    (cart_item["cart_item_id"],)
+                )
+            else:
+                # Insert a new product into the cart.
+                cursor.execute(
+                    """
+                    INSERT INTO cart_items
+                        (user_id, product_id, quantity)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (user_id, product_id, 1)
+                )
+
+            added.append(product_name)
+
+        # Save all successful cart changes together.
+        connection.commit()
+
+        if unavailable:
+            message = (
+                "Available products were added. "
+                "Some products could not be added due to insufficient stock."
+            )
+        else:
+            message = "All course products were added successfully."
+
+        return {
+            "success": True,
+            "message": message,
+            "added": added,
+            "unavailable": unavailable
+        }
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error adding course bundle to cart: {error}")
+
+        return {
+            "success": False,
+            "message": "Failed to add course bundle to cart",
+            "added": [],
+            "unavailable": []
+        }
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        connection.close()
