@@ -46,10 +46,12 @@ function Login() {
             navigate(
                 user.role === "manager"
                     ? "/manager-dashboard"
+                    : user.role === "employee"
+                        ? "/staff-dashboard"
                     : "/ProductCatalog"
             );
 
-        } catch (error) {
+        } catch {
             setError("Unable to connect to the checkout system.");
         } finally {
             setLoading(false);

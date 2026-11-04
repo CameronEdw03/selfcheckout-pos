@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 const API = "http://127.0.0.1:8000";
 
@@ -178,6 +178,7 @@ async function readResponse(response) {
 
 function ProductCatalog() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [products, setProducts] = useState([]);
   const [selectedColors, setSelectedColors] = useState({});
@@ -191,6 +192,27 @@ function ProductCatalog() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+  const [priceDiscountProduct, setPriceDiscountProduct] = useState(null);
+  const [priceDiscountForm, setPriceDiscountForm] = useState({
+    new_price: "",
+    reason: "",
+    password: "",
+  });
+  const [savingPriceDiscount, setSavingPriceDiscount] = useState(false);
+  const [priceDiscountError, setPriceDiscountError] = useState("");
+  const [priceDiscountSuccess, setPriceDiscountSuccess] = useState("");
+  const [priceHistory, setPriceHistory] = useState(null);
+  const [priceHistoryPassword, setPriceHistoryPassword] = useState("");
+  const [loadingPriceHistory, setLoadingPriceHistory] = useState(false);
+  const [priceHistoryError, setPriceHistoryError] = useState("");
+  const [staffStudentId, setStaffStudentId] = useState("");
+  const [staffPassword, setStaffPassword] = useState("");
+  const [staffTransaction, setStaffTransaction] = useState(null);
+  const [staffTransactionLoading, setStaffTransactionLoading] = useState(false);
+  const [staffTransactionError, setStaffTransactionError] = useState("");
+  const [staffTransactionMessage, setStaffTransactionMessage] = useState("");
+  const [staffDiscountDrafts, setStaffDiscountDrafts] = useState({});
+  const [staffBusyItemId, setStaffBusyItemId] = useState(null);
 
   const [category, setCategory] = useState("All");
   const [search, setSearch] = useState("");
@@ -235,12 +257,22 @@ function ProductCatalog() {
         return;
       }
 
+      if (user.role === "employee" && location.pathname !== "/staff-dashboard") {
+        navigate("/staff-dashboard", { replace: true });
+        return;
+      }
+
+      if (user.role !== "employee" && location.pathname === "/staff-dashboard") {
+        navigate("/ProductCatalog", { replace: true });
+        return;
+      }
+
       setCurrentUser(user);
     } catch {
       localStorage.removeItem("user");
       navigate("/login");
     }
-  }, [navigate]);
+  }, [location.pathname, navigate]);
 
   // Load all store products and their available colors.
   useEffect(() => {
@@ -530,7 +562,273 @@ function ProductCatalog() {
     }
   }
 
+  async function refreshStaffTransaction(studentId, password = staffPassword) {
+    const response = await fetch(
+      `${API}/staff/transactions/${encodeURIComponent(studentId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_name: currentUser.username,
+          password,
+        }),
+      }
+    );
+    const data = await readResponse(response);
+
+    if (!Array.isArray(data.cart)) {
+      throw new Error("The student transaction response was invalid.");
+    }
+
+    setStaffTransaction(data);
+    return data;
+  }
+
+  async function loadStaffTransaction(event) {
+    event.preventDefault();
+    setStaffTransactionLoading(true);
+    setStaffTransactionError("");
+    setStaffTransactionMessage("");
+    setStaffTransaction(null);
+
+    try {
+      const studentId = staffStudentId.trim();
+      if (!studentId) {
+        throw new Error("Enter a student ID.");
+      }
+
+      await refreshStaffTransaction(studentId);
+      setStaffStudentId(studentId);
+    } catch (err) {
+      setStaffTransactionError(
+        err.message || "Unable to load the student transaction."
+      );
+    } finally {
+      setStaffTransactionLoading(false);
+    }
+  }
+
+  async function removeStaffTransactionItem(productId) {
+    if (!staffTransaction) return;
+
+    setStaffBusyItemId(productId);
+    setStaffTransactionError("");
+    setStaffTransactionMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/staff/transactions/${encodeURIComponent(
+          staffTransaction.student_id
+        )}/items/${productId}/remove`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_name: currentUser.username,
+            password: staffPassword,
+          }),
+        }
+      );
+      await readResponse(response);
+      await refreshStaffTransaction(staffTransaction.student_id);
+      setStaffTransactionMessage("Product removed from the student transaction.");
+    } catch (err) {
+      setStaffTransactionError(
+        err.message || "Unable to remove the product from this transaction."
+      );
+    } finally {
+      setStaffBusyItemId(null);
+    }
+  }
+
+  async function applyStaffTransactionDiscount(event, item) {
+    event.preventDefault();
+    if (!staffTransaction) return;
+
+    const draft = staffDiscountDrafts[item.product_id] ?? {};
+    setStaffBusyItemId(item.product_id);
+    setStaffTransactionError("");
+    setStaffTransactionMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/staff/transactions/${encodeURIComponent(
+          staffTransaction.student_id
+        )}/items/${item.product_id}/discount`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_name: currentUser.username,
+            password: staffPassword,
+            new_price: Number(draft.new_price),
+            reason: (draft.reason ?? "").trim(),
+          }),
+        }
+      );
+      const data = await readResponse(response);
+      await refreshStaffTransaction(staffTransaction.student_id);
+      setStaffDiscountDrafts((drafts) => ({
+        ...drafts,
+        [item.product_id]: { new_price: "", reason: "" },
+      }));
+      setStaffTransactionMessage(
+        `${item.name}: price reduced from $${formatMoney(
+          data.previous_price
+        )} to $${formatMoney(data.new_price)}.`
+      );
+    } catch (err) {
+      setStaffTransactionError(
+        err.message || "Unable to apply the transaction discount."
+      );
+    } finally {
+      setStaffBusyItemId(null);
+    }
+  }
+
+  async function cancelStaffTransaction() {
+    if (!staffTransaction) return;
+    if (
+      !window.confirm(
+        `Cancel the in-progress transaction for ${staffTransaction.student_id}? This removes all items from their cart.`
+      )
+    ) {
+      return;
+    }
+
+    setStaffTransactionLoading(true);
+    setStaffTransactionError("");
+    setStaffTransactionMessage("");
+
+    try {
+      const response = await fetch(
+        `${API}/staff/transactions/${encodeURIComponent(
+          staffTransaction.student_id
+        )}/cancel`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_name: currentUser.username,
+            password: staffPassword,
+          }),
+        }
+      );
+      await readResponse(response);
+      setStaffTransaction((transaction) => ({
+        ...transaction,
+        cart: [],
+        total: "0.00",
+      }));
+      setStaffTransactionMessage("The student transaction was canceled.");
+    } catch (err) {
+      setStaffTransactionError(
+        err.message || "Unable to cancel the student transaction."
+      );
+    } finally {
+      setStaffTransactionLoading(false);
+    }
+  }
+
   // Remove one product from the cart.
+  async function submitPriceDiscount(event) {
+    event.preventDefault();
+
+    if (!priceDiscountProduct || !currentUser) return;
+
+    setSavingPriceDiscount(true);
+    setPriceDiscountError("");
+    setPriceDiscountSuccess("");
+
+    try {
+      const response = await fetch(
+        `${API}/products/${getProductId(priceDiscountProduct)}/price-discount`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            user_name: currentUser.username,
+            password: priceDiscountForm.password,
+            new_price: Number(priceDiscountForm.new_price),
+            reason: priceDiscountForm.reason.trim(),
+          }),
+        }
+      );
+
+      const data = await readResponse(response);
+
+      setProducts((currentProducts) =>
+        currentProducts.map((product) =>
+          getProductId(product) === getProductId(priceDiscountProduct)
+            ? {
+                ...product,
+                price: data.new_price,
+                discount_percent: 0,
+              }
+            : product
+        )
+      );
+      setPriceDiscountSuccess(
+        `${priceDiscountProduct.name} price updated from $${formatMoney(
+          data.old_price
+        )} to $${formatMoney(data.new_price)}.`
+      );
+      setPriceDiscountProduct(null);
+      setPriceDiscountForm({ new_price: "", reason: "", password: "" });
+    } catch (err) {
+      setPriceDiscountError(
+        err.message || "Unable to update the product price."
+      );
+    } finally {
+      setSavingPriceDiscount(false);
+    }
+  }
+
+  function openPriceDiscount(product) {
+    setPriceDiscountProduct(product);
+    setPriceDiscountForm({ new_price: "", reason: "", password: "" });
+    setPriceDiscountError("");
+    setPriceDiscountSuccess("");
+  }
+
+  async function loadPriceHistory(event) {
+    event.preventDefault();
+    if (!currentUser) return;
+
+    setLoadingPriceHistory(true);
+    setPriceHistoryError("");
+
+    try {
+      const response = await fetch(`${API}/products/price-history`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_name: currentUser.username,
+          password: priceHistoryPassword,
+        }),
+      });
+
+      const data = await readResponse(response);
+
+      if (!Array.isArray(data)) {
+        throw new Error("The product price history response was invalid.");
+      }
+
+      setPriceHistory(data);
+      setPriceHistoryPassword("");
+    } catch (err) {
+      setPriceHistoryError(
+        err.message || "Unable to load product price history."
+      );
+    } finally {
+      setLoadingPriceHistory(false);
+    }
+  }
+
   async function removeFromCart(productId) {
     if (!currentUser?.user_id) return;
 
@@ -820,7 +1118,7 @@ function ProductCatalog() {
               {currentUser && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    Customer
+                    {currentUser.role === "employee" ? "Employee" : "Customer"}
                   </p>
                   <p className="text-sm font-bold text-blue-950">
                     {currentUser.username}
@@ -837,7 +1135,11 @@ function ProductCatalog() {
                   }}
                   className="flex h-12 items-center gap-3 rounded-lg bg-blue-900 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-800"
                 >
-                  <span>Cart</span>
+                  <span>
+                    {currentUser?.role === "employee"
+                      ? "Transaction"
+                      : "Cart"}
+                  </span>
                   <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-red-600 px-2 text-xs font-black">
                     {cartCount}
                   </span>
@@ -847,7 +1149,11 @@ function ProductCatalog() {
                   <section className="absolute right-0 top-14 z-30 w-[min(360px,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-2xl">
                     <div className="border-b border-slate-200 bg-blue-950 px-5 py-4">
                       <div className="flex items-center justify-between">
-                        <h2 className="font-bold text-white">Your Cart</h2>
+                        <h2 className="font-bold text-white">
+                          {currentUser?.role === "employee"
+                            ? "Current Transaction"
+                            : "Your Cart"}
+                        </h2>
                         <span className="text-sm font-semibold text-blue-200">
                           {cartCount} {cartCount === 1 ? "item" : "items"}
                         </span>
@@ -897,9 +1203,16 @@ function ProductCatalog() {
                                 <button
                                   type="button"
                                   onClick={() => removeFromCart(item.product_id)}
+                                  aria-label={
+                                    currentUser?.role === "employee"
+                                      ? `Remove ${item.name} from the current transaction`
+                                      : `Remove ${item.name} from cart`
+                                  }
                                   className="text-xs font-bold text-red-600 hover:text-red-800"
                                 >
-                                  Remove
+                                  {currentUser?.role === "employee"
+                                    ? "Remove item"
+                                    : "Remove"}
                                 </button>
                               </div>
 
@@ -959,7 +1272,9 @@ function ProductCatalog() {
                               onClick={removeAllFromCart}
                               className="rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50"
                             >
-                              Clear cart
+                              {currentUser?.role === "employee"
+                                ? "Clear transaction"
+                                : "Clear cart"}
                             </button>
                           </div>
 
@@ -990,15 +1305,411 @@ function ProductCatalog() {
       </header>
 
       <main className="mx-auto max-w-[1600px] px-6 py-8 lg:px-10">
+        {priceDiscountSuccess && (
+          <p
+            role="status"
+            className="mb-5 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800"
+          >
+            {priceDiscountSuccess}
+          </p>
+        )}
+
         <div className="mb-6 rounded-xl bg-blue-950 px-6 py-6 text-white shadow-sm">
           <p className="text-sm font-bold uppercase tracking-wider text-blue-200">
-            Dallas College Library
+            {currentUser?.role === "employee"
+              ? "Staff Workspace"
+              : "Dallas College Library"}
           </p>
-          <h2 className="mt-1 text-3xl font-black">Self-Checkout</h2>
+          <h2 className="mt-1 text-3xl font-black">
+            {currentUser?.role === "employee"
+              ? "Staff Dashboard"
+              : "Self-Checkout"}
+          </h2>
           <p className="mt-2 text-sm text-blue-100">
-            Select the items you would like to check out.
+            {currentUser?.role === "employee"
+              ? "Manage product discounts and the active transaction."
+              : "Select the items you would like to check out."}
           </p>
         </div>
+
+        {currentUser?.role === "employee" && (
+          <section
+            aria-labelledby="staff-tasks-title"
+            className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+          >
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2
+                  id="staff-tasks-title"
+                  className="text-lg font-black text-blue-950"
+                >
+                  Staff Tasks
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Choose a task to continue working.
+                </p>
+              </div>
+              <p className="text-sm font-semibold text-slate-600">
+                Active transaction: {cartCount}{" "}
+                {cartCount === 1 ? "item" : "items"} · $
+                {formatMoney(cartTotal)}
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() =>
+                  document
+                    .getElementById("staff-product-list")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }
+                className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-left transition hover:border-amber-400"
+              >
+                <span className="block font-bold text-amber-900">
+                  Change a catalog price
+                </span>
+                <span className="mt-1 block text-sm text-amber-800">
+                  Update a product price for future transactions and record why.
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCartOpen(true);
+                  refreshCart().catch(() => {});
+                }}
+                className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-left transition hover:border-blue-400"
+              >
+                <span className="block font-bold text-blue-950">
+                  Manage staff cart
+                </span>
+                <span className="mt-1 block text-sm text-blue-800">
+                  Manage items in your staff cart.
+                </span>
+              </button>
+            </div>
+          </section>
+        )}
+
+        {currentUser?.role === "employee" && (
+          <section className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-lg font-black text-blue-950">
+                Manage a Student Transaction
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Load an in-progress transaction by student ID to remove items,
+                cancel it, or record a transaction-only discount.
+              </p>
+              <form
+                onSubmit={loadStaffTransaction}
+                className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+              >
+                <label className="text-sm font-semibold text-slate-700">
+                  Student ID
+                  <input
+                    required
+                    value={staffStudentId}
+                    onChange={(event) => {
+                      setStaffStudentId(event.target.value);
+                      setStaffTransaction(null);
+                      setStaffTransactionError("");
+                      setStaffTransactionMessage("");
+                    }}
+                    autoComplete="off"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Confirm employee password
+                  <input
+                    required
+                    type="password"
+                    autoComplete="current-password"
+                    value={staffPassword}
+                    onChange={(event) => setStaffPassword(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={staffTransactionLoading}
+                  className="rounded-lg bg-blue-950 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                >
+                  {staffTransactionLoading
+                    ? "Loading..."
+                    : "Load transaction"}
+                </button>
+              </form>
+
+              {staffTransactionError && (
+                <p role="alert" className="mt-3 text-sm font-semibold text-red-700">
+                  {staffTransactionError}
+                </p>
+              )}
+              {staffTransactionMessage && (
+                <p role="status" className="mt-3 text-sm font-semibold text-green-700">
+                  {staffTransactionMessage}
+                </p>
+              )}
+            </div>
+
+            {staffTransaction && (
+              <div className="p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-bold text-slate-900">
+                      {staffTransaction.username} · Student ID{" "}
+                      {staffTransaction.student_id}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      In-progress transaction · {staffTransaction.cart.length}{" "}
+                      {staffTransaction.cart.length === 1 ? "product" : "products"}{" "}
+                      · Total $
+                      {formatMoney(
+                        staffTransaction.cart.reduce(
+                          (total, item) =>
+                            total +
+                            Number(item.discounted_price ?? item.price) *
+                              Number(item.quantity),
+                          0
+                        )
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={
+                      staffTransactionLoading ||
+                      staffTransaction.cart.length === 0
+                    }
+                    onClick={cancelStaffTransaction}
+                    className="rounded-lg border border-red-300 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Cancel transaction
+                  </button>
+                </div>
+
+                {staffTransaction.cart.length === 0 ? (
+                  <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
+                    This student has no items in the current transaction.
+                  </p>
+                ) : (
+                  <ul className="mt-4 divide-y divide-slate-200 rounded-lg border border-slate-200">
+                    {staffTransaction.cart.map((item) => {
+                      const currentPrice = Number(
+                        item.discounted_price ?? item.price
+                      );
+                      const draft =
+                        staffDiscountDrafts[item.product_id] ?? {
+                          new_price: "",
+                          reason: "",
+                        };
+
+                      return (
+                        <li key={item.product_id} className="p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-slate-900">
+                                {item.name} × {item.quantity}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-600">
+                                Unit price: $
+                                {formatMoney(currentPrice)}
+                                {item.discounted_by && (
+                                  <span className="ml-2 text-green-700">
+                                    (discounted by {item.discounted_by})
+                                  </span>
+                                )}
+                              </p>
+                              {item.discount_reason && (
+                                <p className="mt-1 text-sm text-slate-500">
+                                  Reason: {item.discount_reason}
+                                </p>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              disabled={staffBusyItemId === item.product_id}
+                              onClick={() =>
+                                removeStaffTransactionItem(item.product_id)
+                              }
+                              className="rounded-md border border-red-200 px-3 py-1.5 text-sm font-bold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              Remove product
+                            </button>
+                          </div>
+
+                          <form
+                            onSubmit={(event) =>
+                              applyStaffTransactionDiscount(event, item)
+                            }
+                            className="mt-4 grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end"
+                          >
+                            <label className="text-sm font-semibold text-slate-700">
+                              New unit price
+                              <input
+                                required
+                                type="number"
+                                min="0"
+                                max={Math.max(0, currentPrice - 0.01).toFixed(2)}
+                                step="0.01"
+                                value={draft.new_price}
+                                onChange={(event) =>
+                                  setStaffDiscountDrafts((drafts) => ({
+                                    ...drafts,
+                                    [item.product_id]: {
+                                      ...draft,
+                                      new_price: event.target.value,
+                                    },
+                                  }))
+                                }
+                                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                              />
+                            </label>
+                            <label className="text-sm font-semibold text-slate-700">
+                              Reason for discount
+                              <input
+                                required
+                                maxLength="500"
+                                value={draft.reason}
+                                onChange={(event) =>
+                                  setStaffDiscountDrafts((drafts) => ({
+                                    ...drafts,
+                                    [item.product_id]: {
+                                      ...draft,
+                                      reason: event.target.value,
+                                    },
+                                  }))
+                                }
+                                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                              />
+                            </label>
+                            <button
+                              type="submit"
+                              disabled={
+                                staffBusyItemId === item.product_id ||
+                                currentPrice <= 0
+                              }
+                              className="rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {staffBusyItemId === item.product_id
+                                ? "Saving..."
+                                : "Apply discount"}
+                            </button>
+                          </form>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {currentUser?.role === "employee" && (
+          <section className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-lg font-black text-slate-900">
+                Product Price History
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Review the old price, new price, reason, and staff member for
+                recorded discounts.
+              </p>
+              <form
+                onSubmit={loadPriceHistory}
+                className="mt-3 flex flex-wrap items-end gap-3"
+              >
+                <label className="min-w-60 text-sm font-semibold text-slate-700">
+                  Confirm employee password
+                  <input
+                    required
+                    type="password"
+                    autoComplete="current-password"
+                    value={priceHistoryPassword}
+                    onChange={(event) =>
+                      setPriceHistoryPassword(event.target.value)
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={loadingPriceHistory}
+                  className="rounded-lg bg-blue-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+                >
+                  {loadingPriceHistory
+                    ? "Loading History..."
+                    : priceHistory
+                      ? "Refresh History"
+                      : "View History"}
+                </button>
+              </form>
+
+              {priceHistoryError && (
+                <p role="alert" className="mt-3 text-sm font-semibold text-red-700">
+                  {priceHistoryError}
+                </p>
+              )}
+            </div>
+
+            {priceHistory && (
+              priceHistory.length === 0 ? (
+                <p className="px-5 py-6 text-sm font-semibold text-slate-600">
+                  No product price discounts have been recorded.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[820px] text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th scope="col" className="px-5 py-3">Product</th>
+                        <th scope="col" className="px-5 py-3 text-right">Old Price</th>
+                        <th scope="col" className="px-5 py-3 text-right">New Price</th>
+                        <th scope="col" className="px-5 py-3">Reason</th>
+                        <th scope="col" className="px-5 py-3">Changed By</th>
+                        <th scope="col" className="px-5 py-3">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {priceHistory.map((entry, index) => (
+                        <tr
+                          key={`${entry.product_id}-${entry.changed_at}-${index}`}
+                        >
+                          <th
+                            scope="row"
+                            className="whitespace-nowrap px-5 py-3 font-bold text-slate-900"
+                          >
+                            {entry.product_name} (#{entry.product_id})
+                          </th>
+                          <td className="whitespace-nowrap px-5 py-3 text-right text-slate-600">
+                            ${Number(entry.old_price).toFixed(2)}
+                          </td>
+                          <td className="whitespace-nowrap px-5 py-3 text-right font-bold text-green-700">
+                            ${Number(entry.new_price).toFixed(2)}
+                          </td>
+                          <td className="px-5 py-3 text-slate-600">
+                            {entry.reason}
+                          </td>
+                          <td className="whitespace-nowrap px-5 py-3 text-slate-600">
+                            {entry.changed_by}
+                          </td>
+                          <td className="whitespace-nowrap px-5 py-3 text-slate-600">
+                            {new Date(entry.changed_at).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+          </section>
+        )}
 
         {cartError && !isCartOpen && (
           <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1100,7 +1811,7 @@ function ProductCatalog() {
           </div>
         </div>
 
-        <div className="mb-5 flex items-center justify-between">
+        <div id="staff-product-list" className="mb-5 flex items-center justify-between scroll-mt-6">
           <div>
             <h2 className="text-xl font-black text-slate-900">
               {selectedCourse ? "Products for this Course" : "Available Items"}
@@ -1268,6 +1979,17 @@ function ProductCatalog() {
                         {loadingCart ? "Please wait..." : "Add to Cart"}
                       </button>
                     </div>
+
+                    {currentUser?.role === "employee" && (
+                      <button
+                        type="button"
+                        disabled={Number(product.price) <= 0}
+                        onClick={() => openPriceDiscount(product)}
+                        className="mt-3 w-full rounded-lg border border-amber-300 px-4 py-2 text-sm font-bold text-amber-800 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Discount Price
+                      </button>
+                    )}
                   </div>
                 </article>
               );
@@ -1275,6 +1997,110 @@ function ProductCatalog() {
           </div>
         )}
       </main>
+
+      {priceDiscountProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6">
+          <form
+            onSubmit={submitPriceDiscount}
+            className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-6 shadow-2xl"
+          >
+            <div>
+              <h2 className="text-xl font-black text-slate-900">
+                Discount Catalog Price
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                {priceDiscountProduct.name} currently costs $
+                {formatMoney(getProductPrice(priceDiscountProduct))}. Enter a
+                lower catalog price and explain the reason. This does not
+                change a student&apos;s in-progress transaction.
+              </p>
+            </div>
+
+            <label className="block text-sm font-semibold text-slate-700">
+              New discounted price
+              <input
+                required
+                type="number"
+                min="0"
+                max={Math.max(
+                  0,
+                  Number(priceDiscountProduct.price) - 0.01
+                ).toFixed(2)}
+                step="0.01"
+                value={priceDiscountForm.new_price}
+                onChange={(event) =>
+                  setPriceDiscountForm((form) => ({
+                    ...form,
+                    new_price: event.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            </label>
+
+            <label className="block text-sm font-semibold text-slate-700">
+              Reason for discount
+              <textarea
+                required
+                maxLength="500"
+                rows="3"
+                value={priceDiscountForm.reason}
+                onChange={(event) =>
+                  setPriceDiscountForm((form) => ({
+                    ...form,
+                    reason: event.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            </label>
+
+            <label className="block text-sm font-semibold text-slate-700">
+              Confirm employee password
+              <input
+                required
+                type="password"
+                autoComplete="current-password"
+                value={priceDiscountForm.password}
+                onChange={(event) =>
+                  setPriceDiscountForm((form) => ({
+                    ...form,
+                    password: event.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            </label>
+
+            {priceDiscountError && (
+              <p role="alert" className="text-sm font-semibold text-red-700">
+                {priceDiscountError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={savingPriceDiscount}
+                onClick={() => {
+                  setPriceDiscountProduct(null);
+                  setPriceDiscountError("");
+                }}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingPriceDiscount}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+              >
+                {savingPriceDiscount ? "Saving..." : "Apply Discount"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {cartCount > 0 && (
         <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">

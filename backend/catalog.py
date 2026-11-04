@@ -1,4 +1,6 @@
 
+from decimal import Decimal, ROUND_HALF_UP
+
 from connection import create_connection
 
 
@@ -98,7 +100,12 @@ def edit_product(product_id, name, description, price, quantity, category):
         connection.close()
 
 
-def apply_low_stock_discount(product_id, discount_percent=5):
+def apply_low_stock_discount(
+    product_id,
+    reason,
+    changed_by,
+    discount_percent=5,
+):
     """Apply the fixed discount only when a product is below the stock threshold."""
     connection = create_connection()
 
@@ -112,38 +119,169 @@ def apply_low_stock_discount(product_id, discount_percent=5):
 
         cursor.execute(
             """
-            UPDATE products
-            SET discount_percent = %s
+            SELECT name, price, quantity, discount_percent
+            FROM products
             WHERE product_id = %s
-              AND quantity < 5
-              AND discount_percent = 0
+            FOR UPDATE
             """,
-            (discount_percent, product_id)
-        )
-
-        connection.commit()
-
-        if cursor.rowcount > 0:
-            return "applied"
-
-        cursor.execute(
-            "SELECT quantity, discount_percent FROM products WHERE product_id = %s",
             (product_id,)
         )
 
         product = cursor.fetchone()
 
         if not product:
+            connection.rollback()
             return "not_found"
 
-        if product[0] >= 5:
+        product_name, price, quantity, current_discount = product
+
+        if quantity >= 5:
+            connection.rollback()
             return "stock_not_eligible"
 
-        return "already_discounted"
+        if Decimal(str(current_discount or 0)) > 0:
+            connection.rollback()
+            return "already_discounted"
+
+        old_price = (
+            Decimal(str(price))
+            * (
+                Decimal("1")
+                - Decimal(str(current_discount or 0)) / Decimal("100")
+            )
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        new_price = (
+            old_price
+            * (Decimal("1") - Decimal(str(discount_percent)) / Decimal("100"))
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        cursor.execute(
+            """
+            INSERT INTO product_price_history
+                (product_id, product_name, previous_price, new_price, reason, changed_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (product_id, product_name, old_price, new_price, reason, changed_by)
+        )
+        cursor.execute(
+            """
+            UPDATE products
+            SET discount_percent = %s
+            WHERE product_id = %s
+            """,
+            (discount_percent, product_id)
+        )
+        connection.commit()
+        return "applied"
 
     except Exception as error:
+        connection.rollback()
         print(f"Error applying product discount: {error}")
         return "unavailable"
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def update_product_discount_price(product_id, new_price, reason, changed_by):
+    """Set a lower product price and record the change atomically."""
+    connection = create_connection()
+
+    if not connection:
+        return "unavailable", None
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT name, price, discount_percent
+            FROM products
+            WHERE product_id = %s
+            FOR UPDATE
+            """,
+            (product_id,)
+        )
+        product = cursor.fetchone()
+
+        if not product:
+            connection.rollback()
+            return "not_found", None
+
+        product_name, current_price, discount_percent = product
+        old_price = (
+            Decimal(str(current_price))
+            * (Decimal("1") - Decimal(str(discount_percent or 0)) / Decimal("100"))
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        if new_price >= old_price:
+            connection.rollback()
+            return "price_not_lower", None
+
+        cursor.execute(
+            """
+            INSERT INTO product_price_history
+                (product_id, product_name, previous_price, new_price, reason, changed_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (product_id, product_name, old_price, new_price, reason, changed_by)
+        )
+        cursor.execute(
+            """
+            UPDATE products
+            SET price = %s, discount_percent = 0
+            WHERE product_id = %s
+            """,
+            (new_price, product_id)
+        )
+
+        connection.commit()
+        return "updated", {
+            "old_price": old_price,
+            "new_price": new_price,
+        }
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error updating product discount price: {error}")
+        return "unavailable", None
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_product_price_history(limit=100):
+    """Return the most recent product price changes."""
+    connection = create_connection()
+
+    if not connection:
+        return None
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT product_id, product_name, previous_price AS old_price,
+                   new_price, reason,
+                   changed_by, changed_at
+            FROM product_price_history
+            ORDER BY changed_at DESC, history_id DESC
+            LIMIT %s
+            """,
+            (limit,)
+        )
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving product price history: {error}")
+        return None
 
     finally:
         if cursor:
