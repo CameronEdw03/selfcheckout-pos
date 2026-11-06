@@ -366,6 +366,41 @@ function ProductCatalog() {
     }
   }
 
+  // Add all available products from a selected course to the cart.
+  async function addCourseBundleToCart() {
+    if (!currentUser?.user_id) {
+      navigate("/login");
+      return;
+    }
+
+    if (!selectedCourseId || loadingCart) return;
+
+    setCartError("");
+
+    try {
+      const response = await fetch(
+        `${API}/cart/${currentUser.user_id}/courses/${selectedCourseId}`,
+        { method: "POST" }
+      );
+
+      const data = await readResponse(response);
+
+      if (data.success === false) {
+        throw new Error(data.message || "Unable to add course bundle.");
+      }
+
+      await refreshCart();
+
+      if (data.unavailable?.length > 0) {
+        setCartError(
+          `Unavailable products: ${data.unavailable.join(", ")}`
+        );
+      }
+    } catch (err) {
+      setCartError(err.message || "Unable to add course bundle.");
+    }
+  }
+
   // Remove one product from the cart.
   async function removeFromCart(productId) {
     if (!currentUser?.user_id) return;
@@ -913,6 +948,15 @@ function ProductCatalog() {
                   ? "product"
                   : "products"}
               </p>
+              
+              <button
+              type="button"
+              onClick={addCourseBundleToCart}
+              disabled={loadingCart || !selectedCourse.products?.length}
+              className="mt-3 rounded-lg bg-red-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+              {loadingCart ? "Adding products..." : "Add All Course Products to Cart"}
+              </button>
             </div>
           )}
         </section>
