@@ -768,8 +768,8 @@ function ProductCatalog() {
       setStaffTransactionLoading(false);
     }
   }
-    }
-  }
+    
+
 
   // Remove one product from the cart.
   async function submitPriceDiscount(event) {
