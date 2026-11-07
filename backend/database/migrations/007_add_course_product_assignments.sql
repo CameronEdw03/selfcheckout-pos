@@ -28,6 +28,29 @@ CREATE TABLE IF NOT EXISTS courses (
     description VARCHAR(255)
 );
 
+-- CREATE TABLE IF NOT EXISTS skips existing tables, so add the column
+-- separately for databases that created courses before it existed.
+DELIMITER //
+
+CREATE PROCEDURE add_course_description_if_missing()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'courses'
+          AND COLUMN_NAME = 'description'
+    ) THEN
+        ALTER TABLE courses
+        ADD COLUMN description VARCHAR(255);
+    END IF;
+END//
+
+CALL add_course_description_if_missing()//
+DROP PROCEDURE add_course_description_if_missing//
+
+DELIMITER ;
+
 CREATE TABLE IF NOT EXISTS course_products (
     course_id INT NOT NULL,
     product_id INT NOT NULL,

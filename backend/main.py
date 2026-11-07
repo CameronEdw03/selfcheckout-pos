@@ -15,6 +15,7 @@ from cart import (
     get_cart_total,
     update_cart_quantity,
     add_course_bundle_to_cart,
+    set_cart_item_discount,
 )
 
 from user import (
@@ -39,8 +40,9 @@ from catalog import (
     get_all_sizes,
     get_product_by_id_with_size,
 )
-from payment import pay_with_cash, pay_with_card
+from payment import pay_with_cash, pay_with_card, pay_with_voucher, refund_voucher
 from receipt import create_order
+from staff_activity import log_staff_activity, get_staff_activity
 
 
 app = FastAPI()
@@ -116,6 +118,13 @@ class StaffTransactionRequest(BaseModel):
     password: str
 
 
+class StaffActivityRequest(BaseModel):
+    user_name: str
+    password: str
+    start_date: date
+    end_date: date
+
+
 class StaffTransactionDiscountRequest(StaffTransactionRequest):
     new_price: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
     reason: str = Field(min_length=1, max_length=500)
@@ -138,6 +147,10 @@ class CashPaymentRequest(BaseModel):
 class CardPaymentRequest(BaseModel):
     approved: bool
     student_id: str | None = None
+
+
+class VoucherPaymentRequest(BaseModel):
+    student_id: str = Field(..., min_length=1, max_length=20)
 
 class CourseProductAssignmentRequest(BaseModel):
     user_name: str
@@ -505,6 +518,70 @@ def card_checkout(user_id: int, request: CardPaymentRequest):
     }
 
 
+@app.post("/checkout/{user_id}/voucher")
+def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
+    student_id = request.student_id.strip()
+
+    # Validates the student ID and applies the student discount.
+    checkout = calculate_checkout_totals(
+        user_id,
+        student_id,
+    )
+
+    # A voucher can only pay for the cart of the student who owns it.
+    student = get_student(student_id)
+
+    if int(student["user_id"]) != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="This student ID does not match the signed-in account.",
+        )
+
+    total = checkout["total"]
+
+    if total <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cart total must be greater than zero.",
+        )
+
+    payment_result = pay_with_voucher(student_id, total)
+
+    if not payment_result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=payment_result["message"],
+        )
+
+    # Put the money back on the voucher if the order can't be saved.
+    try:
+        receipt_id = save_checkout_order(
+            user_id,
+            total,
+            checkout["order_items"],
+        )
+    except HTTPException:
+        if not refund_voucher(student_id, total):
+            print(
+                f"Voucher refund failed for {student_id} "
+                f"after order save failure: {total}"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="The order could not be saved. Your voucher was not charged.",
+        )
+
+    return {
+        "message": payment_result["message"],
+        "subtotal": str(checkout["subtotal"]),
+        "student_discount": str(checkout["student_discount"]),
+        "student_discount_applied": checkout["student_discount_applied"],
+        "total": str(total),
+        "voucher_balance": str(payment_result["remaining_balance"]),
+        "receipt_id": receipt_id,
+    }
+
+
 # -------------------------
 # Manager product routes
 # -------------------------
@@ -561,14 +638,30 @@ def cancel_staff_student_transaction(
     student_id: str,
     request: StaffTransactionRequest,
 ):
-    _verify_employee(request.user_name, request.password)
+    staff_member = _verify_employee(request.user_name, request.password)
     student = _get_student_transaction(student_id)
+
+    # Capture the cart before it is cleared so the manager can see what
+    # was in the canceled transaction.
+    items = get_cart(student["user_id"])
+    cart_total = get_cart_total(student["user_id"])
 
     if not clear_cart(student["user_id"]):
         raise HTTPException(
             status_code=500,
             detail="Unable to cancel the student transaction.",
         )
+
+    log_staff_activity(
+        staff_member["username"],
+        "transaction_canceled",
+        student_id=student["student_id"],
+        quantity=sum(int(item["quantity"]) for item in items),
+        amount=cart_total,
+        details=", ".join(
+            f"{item['name']} x{item['quantity']}" for item in items
+        )[:500] or None,
+    )
 
     return {"message": "Student transaction canceled successfully"}
 
@@ -579,14 +672,33 @@ def remove_staff_student_transaction_item(
     product_id: int,
     request: StaffTransactionRequest,
 ):
-    _verify_employee(request.user_name, request.password)
+    staff_member = _verify_employee(request.user_name, request.password)
     student = _get_student_transaction(student_id)
+
+    removed_item = next(
+        (
+            item
+            for item in get_cart(student["user_id"])
+            if int(item["product_id"]) == product_id
+        ),
+        None,
+    )
 
     if not remove_from_cart(student["user_id"], product_id):
         raise HTTPException(
             status_code=404,
             detail="Product was not found in the student transaction.",
         )
+
+    log_staff_activity(
+        staff_member["username"],
+        "item_removed",
+        student_id=student["student_id"],
+        product_id=product_id,
+        product_name=removed_item["name"] if removed_item else None,
+        quantity=int(removed_item["quantity"]) if removed_item else None,
+        amount=removed_item["line_total"] if removed_item else None,
+    )
 
     return {"message": "Product removed from the student transaction"}
 
@@ -638,6 +750,110 @@ def discount_staff_student_transaction_item(
         "message": "Transaction discount applied successfully",
         "previous_price": str(prices["previous_price"]),
         "new_price": str(prices["new_price"]),
+    }
+
+
+@app.post("/manager/staff-activity")
+def get_manager_staff_activity(request: StaffActivityRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view staff activity",
+        )
+
+    if request.end_date < request.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    result = get_staff_activity(request.start_date, request.end_date)
+
+    if result is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load staff activity.",
+        )
+
+    activities = result["activities"]
+    action_counts = {
+        "price_change": 0,
+        "transaction_discount": 0,
+        "item_removed": 0,
+        "transaction_canceled": 0,
+    }
+    staff_totals = {
+        username: {
+            "staff_username": username,
+            "total_actions": 0,
+            "discount_amount": 0.0,
+            "removed_amount": 0.0,
+            **action_counts,
+        }
+        for username in result["staff_members"]
+    }
+    total_discount = Decimal("0.00")
+    total_removed = Decimal("0.00")
+
+    for activity in activities:
+        action = activity["action"]
+        staff = staff_totals.setdefault(
+            activity["staff_username"],
+            {
+                "staff_username": activity["staff_username"],
+                "total_actions": 0,
+                "discount_amount": 0.0,
+                "removed_amount": 0.0,
+                **action_counts,
+            },
+        )
+
+        staff["total_actions"] += 1
+        staff[action] = staff.get(action, 0) + 1
+        action_counts[action] = action_counts.get(action, 0) + 1
+
+        if activity["discount_amount"] is not None:
+            total_discount += Decimal(str(activity["discount_amount"]))
+            staff["discount_amount"] += activity["discount_amount"]
+
+        if activity["amount"] is not None:
+            total_removed += Decimal(str(activity["amount"]))
+            staff["removed_amount"] += activity["amount"]
+
+    staff_breakdown = sorted(
+        staff_totals.values(),
+        key=lambda staff: (
+            -staff["total_actions"],
+            staff["staff_username"].lower(),
+        ),
+    )
+
+    for staff in staff_breakdown:
+        staff["discount_amount"] = round(staff["discount_amount"], 2)
+        staff["removed_amount"] = round(staff["removed_amount"], 2)
+
+    return {
+        "start_date": request.start_date.isoformat(),
+        "end_date": request.end_date.isoformat(),
+        "summary": {
+            "total_actions": len(activities),
+            "active_staff": sum(
+                1 for staff in staff_breakdown if staff["total_actions"] > 0
+            ),
+            "total_discount": float(total_discount),
+            "total_removed": float(total_removed),
+            "action_counts": action_counts,
+        },
+        "staff_breakdown": staff_breakdown,
+        "activities": activities,
     }
 
 
