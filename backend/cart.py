@@ -1,7 +1,98 @@
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from connection import create_connection
+
+
+def set_cart_item_discount(user_id, product_id, new_price, reason, changed_by):
+    """Set a lower transaction-only price and audit the change atomically."""
+    connection = create_connection()
+    if not connection:
+        raise RuntimeError("Could not connect to the database.")
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                c.cart_item_id,
+                p.name,
+                p.price,
+                c.discounted_price
+            FROM cart_items AS c
+            JOIN products AS p ON p.product_id = c.product_id
+            WHERE c.user_id = %s AND c.product_id = %s
+            FOR UPDATE
+            """,
+            (user_id, product_id),
+        )
+        item = cursor.fetchone()
+
+        if not item:
+            connection.rollback()
+            return "not_found", None
+
+        current_price = (
+            item["discounted_price"]
+            if item["discounted_price"] is not None
+            else item["price"]
+        )
+        previous_price = Decimal(str(current_price)).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+        discounted_price = Decimal(str(new_price)).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+        if discounted_price >= previous_price:
+            connection.rollback()
+            return "price_not_lower", None
+
+        cursor.execute(
+            """
+            INSERT INTO cart_item_price_history
+                (user_id, product_id, product_name, previous_price,
+                 new_price, reason, changed_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                user_id,
+                product_id,
+                item["name"],
+                previous_price,
+                discounted_price,
+                reason,
+                changed_by,
+            ),
+        )
+        cursor.execute(
+            """
+            UPDATE cart_items
+            SET discounted_price = %s,
+                discount_reason = %s,
+                discounted_by = %s
+            WHERE cart_item_id = %s
+            """,
+            (discounted_price, reason, changed_by, item["cart_item_id"]),
+        )
+        connection.commit()
+        return "updated", {
+            "previous_price": previous_price,
+            "new_price": discounted_price,
+        }
+
+    except Exception:
+        connection.rollback()
+        raise
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
 
 
 def add_to_cart(user_id, product_id):
@@ -230,9 +321,12 @@ def get_cart(user_id):
                 p.name,
                 p.description,
                 p.price,
-                p.price AS discounted_price,
+                COALESCE(c.discounted_price, p.price) AS discounted_price,
+                c.discount_reason,
+                c.discounted_by,
                 p.category,
-                ROUND(p.price * c.quantity, 2) AS line_total
+                ROUND(COALESCE(c.discounted_price, p.price) * c.quantity, 2)
+                    AS line_total
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id

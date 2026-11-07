@@ -122,6 +122,14 @@ Products currently contain information such as:
 
 Products can be organized and displayed according to their category, making it easier for users to find what they are looking for.
 
+### Course-based Product Organization
+
+Managers can create courses and assign existing catalog products to each one. Students can select a course in the product catalog to see the supplies organized for that course, such as a math textbook, calculator, and pen. Apply database migration `007_add_course_product_assignments.sql` to existing installations.
+
+### Daily Manager Sales Report
+
+Managers can view a daily report with completed transaction count, total revenue, and category-level sales revenue and units sold.
+
 ### Shopping Cart
 
 Users can currently:
