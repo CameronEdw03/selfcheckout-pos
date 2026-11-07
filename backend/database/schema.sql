@@ -49,6 +49,27 @@ CREATE TABLE IF NOT EXISTS users (
     student_id VARCHAR(20)
 );
 
+CREATE TABLE IF NOT EXISTS staff_activity_log (
+    activity_id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_username VARCHAR(50) NOT NULL,
+    action VARCHAR(40) NOT NULL,
+    student_id VARCHAR(20) NULL,
+    product_id INT NULL,
+    product_name VARCHAR(100) NULL,
+    quantity INT NULL,
+    amount DECIMAL(10,2) NULL,
+    details VARCHAR(500) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_staff_activity_created_at (created_at),
+    INDEX idx_staff_activity_staff (staff_username)
+);
+
+CREATE TABLE IF NOT EXISTS student_vouchers (
+    student_id VARCHAR(20) PRIMARY KEY,
+    balance DECIMAL(10,2) NOT NULL DEFAULT 0,
+    CHECK (balance >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS cart_items (
     cart_item_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,

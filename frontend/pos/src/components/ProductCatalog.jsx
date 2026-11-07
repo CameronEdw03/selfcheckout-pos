@@ -123,6 +123,12 @@ function formatMoney(value) {
   return Number(value || 0).toFixed(2);
 }
 
+const PAYMENT_LABELS = {
+  cash: "Cash",
+  card: "Card",
+  voucher: "Student Voucher",
+};
+
 function getCourseLabel(course) {
   const code =
     course?.course_code ??
@@ -1002,6 +1008,23 @@ function ProductCatalog() {
             }),
           }
         );
+      } else if (paymentMethod === "voucher") {
+        if (!enteredStudentId) {
+          throw new Error("Enter your student ID to pay with your voucher.");
+        }
+
+        response = await fetch(
+          `${API}/checkout/${currentUser.user_id}/voucher`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              student_id: enteredStudentId,
+            }),
+          }
+        );
       } else {
         response = await fetch(
           `${API}/checkout/${currentUser.user_id}/card`,
@@ -1035,6 +1058,7 @@ function ProductCatalog() {
           paymentResponse?.cash_received ??
           (paymentMethod === "cash" ? cashReceived : ""),
         change: paymentResponse?.change ?? null,
+        voucherBalance: paymentResponse?.voucher_balance ?? null,
         message:
           paymentResponse?.message ?? "Checkout completed successfully.",
       });
@@ -1074,7 +1098,10 @@ function ProductCatalog() {
         ? `Student discount: -$${formatMoney(receipt.studentDiscount)}`
         : "",
       `Total: $${formatMoney(receipt.total)}`,
-      `Payment: ${receipt.paymentMethod === "cash" ? "Cash" : "Card"}`,
+      `Payment: ${PAYMENT_LABELS[receipt.paymentMethod]}`,
+      receipt.voucherBalance != null
+        ? `Voucher balance remaining: $${formatMoney(receipt.voucherBalance)}`
+        : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -2290,15 +2317,17 @@ function ProductCatalog() {
                   htmlFor="studentId"
                   className="mb-2 block text-sm font-bold text-slate-700"
                 >
-                  Student ID (optional)
+                  Student ID{" "}
+                  {paymentMethod === "voucher" ? "(required)" : "(optional)"}
                 </label>
                 <input
                   id="studentId"
                   type="text"
                   value={studentId}
                   onChange={(event) => setStudentId(event.target.value)}
-                  placeholder="Enter your student ID"
+                  placeholder="Enter your student ID (e.g. S10001)"
                   autoComplete="off"
+                  required={paymentMethod === "voucher"}
                   className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-700"
                 />
               </div>
@@ -2307,7 +2336,13 @@ function ProductCatalog() {
                 <label className="mb-2 block text-sm font-bold text-slate-700">
                   Payment method
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div
+                  className={`grid gap-3 ${
+                    currentUser?.role === "student"
+                      ? "grid-cols-3"
+                      : "grid-cols-2"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => setPaymentMethod("cash")}
@@ -2330,6 +2365,19 @@ function ProductCatalog() {
                   >
                     Card
                   </button>
+                  {currentUser?.role === "student" && (
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod("voucher")}
+                      className={`rounded-lg border px-4 py-3 text-sm font-bold ${
+                        paymentMethod === "voucher"
+                          ? "border-blue-900 bg-blue-50 text-blue-950"
+                          : "border-slate-200 text-slate-600"
+                      }`}
+                    >
+                      Voucher
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2358,6 +2406,13 @@ function ProductCatalog() {
               {paymentMethod === "card" && (
                 <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
                   Card checkout will use the backend’s simulated card approval.
+                </p>
+              )}
+
+              {paymentMethod === "voucher" && (
+                <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                  The total will be charged to the student voucher for the ID
+                  entered above. The ID must match your account.
                 </p>
               )}
 
@@ -2447,12 +2502,19 @@ function ProductCatalog() {
                 </div>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  Payment: {receipt.paymentMethod === "cash" ? "Cash" : "Card"}
+                  Payment: {PAYMENT_LABELS[receipt.paymentMethod]}
                 </p>
 
                 {receipt.change != null && (
                   <p className="mt-1 text-sm text-slate-500">
                     Change: ${formatMoney(receipt.change)}
+                  </p>
+                )}
+
+                {receipt.voucherBalance != null && (
+                  <p className="mt-1 text-sm text-slate-500">
+                    Voucher balance remaining: $
+                    {formatMoney(receipt.voucherBalance)}
                   </p>
                 )}
               </div>

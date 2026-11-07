@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CourseProductAssignment from "../components/CourseProductAssignment";
+import StaffActivityDashboard from "../components/StaffActivityDashboard";
 
 const API = "http://127.0.0.1:8000";
 
@@ -724,6 +725,9 @@ function ManagerDashboard() {
             </>
           )}
         </section>
+
+        {/* Staff activity */}
+        <StaffActivityDashboard currentUser={currentUser} />
 
         {/* Add product */}
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">

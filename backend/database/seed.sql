@@ -56,3 +56,18 @@ VALUES
 (11, 'mia.harris', 'testpassword', 'student', 'S10010'),
 (12, '123Staff', 'testpassword', 'employee', NULL);
 
+
+INSERT INTO student_vouchers
+(student_id, balance)
+VALUES
+
+('S10001', 250.00),
+('S10002', 250.00),
+('S10003', 250.00),
+('S10004', 250.00),
+('S10005', 250.00),
+('S10006', 250.00),
+('S10007', 250.00),
+('S10008', 250.00),
+('S10009', 250.00),
+('S10010', 250.00);
