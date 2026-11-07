@@ -143,6 +143,15 @@ class CourseProductAssignmentRequest(BaseModel):
     password: str
     required: bool = False
 
+
+class CourseCreateRequest(BaseModel):
+    user_name: str
+    password: str
+    course_number: str = Field(..., min_length=1, max_length=20)
+    course_name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", max_length=255)
+
+
 # -------------------------
 # Checkout / receipt helpers
 # -------------------------
@@ -662,6 +671,7 @@ def get_manager_daily_analytics(request: DailyAnalyticsRequest):
                 o.created_at,
                 oi.product_id,
                 COALESCE(p.name, CONCAT('Product #', oi.product_id)) AS product_name,
+                COALESCE(NULLIF(TRIM(p.category), ''), 'Uncategorized') AS category,
                 oi.quantity,
                 oi.price_each
             FROM orders AS o
@@ -685,6 +695,7 @@ def get_manager_daily_analytics(request: DailyAnalyticsRequest):
 
     transactions_by_id = {}
     product_totals = {}
+    category_totals = {}
     total_revenue = Decimal("0.00")
     units_sold = 0
 
@@ -719,6 +730,18 @@ def get_manager_daily_analytics(request: DailyAnalyticsRequest):
         )
         product["quantity_sold"] += quantity
         product["revenue"] += item_revenue
+
+        category = row["category"]
+        category_total = category_totals.setdefault(
+            category,
+            {
+                "category": category,
+                "quantity_sold": 0,
+                "revenue": Decimal("0.00"),
+            },
+        )
+        category_total["quantity_sold"] += quantity
+        category_total["revenue"] += item_revenue
         units_sold += quantity
 
         transactions_by_id[order_id]["items"].append(
@@ -742,6 +765,14 @@ def get_manager_daily_analytics(request: DailyAnalyticsRequest):
     for product in best_sellers:
         product["revenue"] = float(product["revenue"])
 
+    category_breakdown = sorted(
+        category_totals.values(),
+        key=lambda category: category["category"].lower(),
+    )
+
+    for category in category_breakdown:
+        category["revenue"] = float(category["revenue"])
+
     return {
         "report_date": request.report_date.isoformat(),
         "summary": {
@@ -749,6 +780,7 @@ def get_manager_daily_analytics(request: DailyAnalyticsRequest):
             "total_revenue": float(total_revenue),
             "units_sold": units_sold,
         },
+        "category_breakdown": category_breakdown,
         "best_sellers": best_sellers,
         "transactions": list(transactions_by_id.values()),
     }
@@ -1012,17 +1044,6 @@ def read_product_price_history(request: ProductRequest):
 
 
 # -------------------------
-# Course listing routes
-# -------------------------
-
-@app.get("/courses")
-def get_courses_with_products_endpoint():
-    """Return all courses and their associated products."""
-    courses = get_all_courses_with_products()
-    return courses
-
-
-# -------------------------
 # Product listing routes
 # -------------------------
 
@@ -1143,10 +1164,89 @@ def _verify_course_assignment_manager(user_name: str, password: str):
     if manager.get("role") != "manager":
         raise HTTPException(
             status_code=403,
-            detail="Only managers can assign products to courses",
+            detail="Only managers can manage courses and course products",
         )
 
     return manager
+
+
+@app.post("/courses", status_code=201)
+def create_course(request: CourseCreateRequest):
+    """Create a course that managers can organize products under."""
+    _verify_course_assignment_manager(request.user_name, request.password)
+
+    course_number = request.course_number.strip()
+    course_name = request.course_name.strip()
+
+    if not course_number or not course_name:
+        raise HTTPException(
+            status_code=422,
+            detail="Course number and course name are required",
+        )
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+
+        if connection is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection failed",
+            )
+
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO courses (course_number, course_name, description)
+            VALUES (%s, %s, %s)
+            """,
+            (
+                course_number,
+                course_name,
+                request.description.strip() or None,
+            ),
+        )
+        course_id = cursor.lastrowid
+        connection.commit()
+
+        return {
+            "course_id": course_id,
+            "course_number": course_number,
+            "course_name": course_name,
+            "description": request.description.strip() or None,
+            "products": [],
+            "message": "Course created successfully",
+        }
+
+    except HTTPException:
+        if connection is not None:
+            connection.rollback()
+        raise
+
+    except Exception as error:
+        if connection is not None:
+            connection.rollback()
+
+        if getattr(error, "errno", None) == 1062:
+            raise HTTPException(
+                status_code=409,
+                detail="A course with that course number already exists",
+            )
+
+        print(f"Error creating course: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create course",
+        )
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
 
 
 @app.post("/courses/{course_id}/products/{product_id}")

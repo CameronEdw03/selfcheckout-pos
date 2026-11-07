@@ -10,7 +10,24 @@ CREATE TABLE IF NOT EXISTS products (
     price DECIMAL(10,2) NOT NULL,
     quantity INT NOT NULL DEFAULT 0,
     category VARCHAR(50),
-    discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0
+    discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+    is_tax_exempt BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS courses (
+    course_id INT AUTO_INCREMENT PRIMARY KEY,
+    course_number VARCHAR(20) NOT NULL UNIQUE,
+    course_name VARCHAR(100) NOT NULL,
+    description VARCHAR(255)
+);
+
+CREATE TABLE IF NOT EXISTS course_products (
+    course_id INT NOT NULL,
+    product_id INT NOT NULL,
+    required BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (course_id, product_id),
+    FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS product_price_history (

@@ -396,7 +396,7 @@ def get_all_courses_with_products():
     connection = create_connection()
 
     if not connection:
-        return []
+        return None
 
     cursor = None
 
@@ -408,6 +408,7 @@ def get_all_courses_with_products():
                 c.course_id,
                 c.course_number,
                 c.course_name,
+                c.description AS course_description,
                 p.product_id,
                 p.name AS product_name,
                 p.description,
@@ -437,6 +438,7 @@ def get_all_courses_with_products():
                     "course_id": course_id,
                     "course_number": row["course_number"],
                     "course_name": row["course_name"],
+                    "description": row["course_description"],
                     "products": []
                 }
 
@@ -456,7 +458,7 @@ def get_all_courses_with_products():
 
     except Exception as error:
         print(f"Error retrieving courses and products: {error}")
-        return []
+        return None
 
     finally:
         if cursor:

@@ -259,6 +259,7 @@ function ManagerDashboard() {
 
       if (
         !data.summary ||
+        !Array.isArray(data.category_breakdown) ||
         !Array.isArray(data.best_sellers) ||
         !Array.isArray(data.transactions)
       ) {
@@ -566,6 +567,47 @@ function ManagerDashboard() {
                     {dailyAnalytics.summary.units_sold}
                   </p>
                 </article>
+              </div>
+
+              <div className="mt-6">
+                <h3 className="text-lg font-bold text-slate-900">
+                  Sales by category
+                </h3>
+                {dailyAnalytics.category_breakdown.length === 0 ? (
+                  <p className="mt-3 rounded-lg bg-slate-50 p-4 text-sm text-slate-500">
+                    No category sales were recorded on this date.
+                  </p>
+                ) : (
+                  <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                    <table className="w-full min-w-[480px] divide-y divide-slate-200 text-left text-sm">
+                      <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-4 py-3">Category</th>
+                          <th className="px-4 py-3 text-right">Items sold</th>
+                          <th className="px-4 py-3 text-right">Sales</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {dailyAnalytics.category_breakdown.map((category) => (
+                          <tr key={category.category}>
+                            <th
+                              scope="row"
+                              className="px-4 py-3 font-semibold text-slate-800"
+                            >
+                              {category.category}
+                            </th>
+                            <td className="px-4 py-3 text-right text-slate-600">
+                              {category.quantity_sold}
+                            </td>
+                            <td className="px-4 py-3 text-right font-bold text-slate-900">
+                              {formatCurrency(category.revenue)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               <div className="mt-6">
