@@ -1,3 +1,4 @@
+import CashDrawerWarning from "./CashDrawerWarning";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -104,6 +105,10 @@ function ProductCatalog() {
 
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [cashReceived, setCashReceived] = useState("");
+  const [voucherAmount, setVoucherAmount] = useState("");
+  const [voucherPaymentMethod, setVoucherPaymentMethod] = useState("cash");
+  const [managerUsername, setManagerUsername] = useState("");
+  const [managerPassword, setManagerPassword] = useState("");
   const [studentId, setStudentId] = useState("");
   const [receiptPhone, setReceiptPhone] = useState("");
 
@@ -475,6 +480,10 @@ function ProductCatalog() {
     setCashReceived("");
     setStudentId("");
     setPaymentMethod("cash");
+    setVoucherAmount("");
+    setVoucherPaymentMethod("cash");
+    setManagerUsername("");
+    setManagerPassword("");
     setIsCartOpen(false);
     setIsCheckoutOpen(true);
   }
@@ -534,7 +543,7 @@ function ProductCatalog() {
             }),
           }
         );
-      } else {
+      } else if (paymentMethod === "card") {
         response = await fetch(
           `${API}/checkout/${currentUser.user_id}/card`,
           {
@@ -548,8 +557,51 @@ function ProductCatalog() {
             }),
           }
         );
-      }
+      
+} else if (paymentMethod === "voucher") {
+  const amount = Number(voucherAmount);
 
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Enter a valid voucher amount.");
+  }
+
+  if (!managerUsername.trim() || !managerPassword) {
+    throw new Error("Manager approval is required.");
+  }
+
+  if (
+    voucherPaymentMethod === "cash" &&
+    (cashReceived.trim() === "" ||
+      !Number.isFinite(Number(cashReceived)) ||
+      Number(cashReceived) < 0)
+  ) {
+    throw new Error("Enter a valid cash amount.");
+  }
+
+  response = await fetch(
+    `${API}/checkout/${currentUser.user_id}/voucher`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...checkoutBody,
+        voucher_amount: amount.toFixed(2),
+        payment_method: voucherPaymentMethod,
+        cash_received:
+          voucherPaymentMethod === "cash"
+            ? Number(cashReceived).toFixed(2)
+            : "0",
+        card_approved: voucherPaymentMethod === "card",
+        manager_username: managerUsername.trim(),
+        manager_password: managerPassword,
+      }),
+    }
+  );
+} else {
+  throw new Error("Invalid payment method.");
+}
       const paymentResponse = await readResponse(response);
 
       setReceipt({
@@ -567,7 +619,24 @@ function ProductCatalog() {
           paymentResponse?.cash_received ??
           (paymentMethod === "cash" ? cashReceived : ""),
         change: paymentResponse?.change ?? null,
+                voucherAmount:
+          paymentMethod === "voucher"
+            ? Number(paymentResponse?.voucher_amount ?? 0)
+            : null,
+        remainingAmount:
+          paymentMethod === "voucher"
+            ? Number(paymentResponse?.remaining_amount ?? 0)
+            : null,
+        remainingPaymentMethod:
+          paymentMethod === "voucher"
+            ? paymentResponse?.payment_method
+            : null,
+        approvedByStaffId:
+          paymentMethod === "voucher"
+            ? paymentResponse?.approved_by_staff_id
+            : null,
         message:
+        
           paymentResponse?.message ?? "Checkout completed successfully.",
       });
 
@@ -606,7 +675,27 @@ function ProductCatalog() {
         ? `Student discount: -$${formatMoney(receipt.studentDiscount)}`
         : "",
       `Total: $${formatMoney(receipt.total)}`,
-      `Payment: ${receipt.paymentMethod === "cash" ? "Cash" : "Card"}`,
+    `Payment: ${
+  receipt.paymentMethod === "voucher"
+    ? "Voucher + Split Payment"
+    : receipt.paymentMethod === "cash"
+    ? "Cash"
+    : "Card"
+}`,
+receipt.paymentMethod === "voucher"
+  ? `Voucher Amount: $${formatMoney(receipt.voucherAmount)}`
+  : "",
+receipt.paymentMethod === "voucher"
+  ? `Remaining Balance: $${formatMoney(receipt.remainingAmount)}`
+  : "",
+receipt.paymentMethod === "voucher"
+  ? `Remaining Payment Method: ${
+      receipt.remainingPaymentMethod === "cash" ? "Cash" : "Card"
+    }`
+  : "",
+receipt.paymentMethod === "voucher"
+  ? `Approved by Staff ID: ${receipt.approvedByStaffId}`
+  : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -861,6 +950,7 @@ function ProductCatalog() {
       </header>
 
       <main className="mx-auto max-w-[1600px] px-6 py-8 lg:px-10">
+{currentUser?.role === "manager" && <CashDrawerWarning />}
         <div className="mb-6 rounded-xl bg-blue-950 px-6 py-6 text-white shadow-sm">
           <p className="text-sm font-bold uppercase tracking-wider text-blue-200">
             Dallas College Library
@@ -1202,9 +1292,123 @@ function ProductCatalog() {
                   >
                     Card
                   </button>
+                  <button
+  type="button"
+  onClick={() => setPaymentMethod("voucher")}
+  className={`rounded-lg border px-4 py-3 text-sm font-bold ${
+    paymentMethod === "voucher"
+      ? "border-blue-900 bg-blue-50 text-blue-950"
+      : "border-slate-200 text-slate-600"
+  }`}
+>
+  Voucher
+</button>
                 </div>
               </div>
+{paymentMethod === "voucher" && (
+  <div>
+    <label
+      htmlFor="voucherAmount"
+      className="mb-2 block text-sm font-bold text-slate-700"
+    >
+      Voucher Amount ($)
+    </label>
 
+    <input
+      id="voucherAmount"
+      type="number"
+      min="0.01"
+      step="0.01"
+      value={voucherAmount}
+      onChange={(e) => setVoucherAmount(e.target.value)}
+      placeholder="Enter voucher amount"
+      required
+      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+    />
+
+    <div className="mt-4">
+      <label
+        htmlFor="voucherPaymentMethod"
+        className="mb-2 block text-sm font-bold text-slate-700"
+      >
+        Pay Remaining Balance With
+      </label>
+
+      <select
+        id="voucherPaymentMethod"
+        value={voucherPaymentMethod}
+        onChange={(e) => setVoucherPaymentMethod(e.target.value)}
+        className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+      >
+        <option value="cash">Cash</option>
+        <option value="card">Card</option>
+      </select>
+    </div>
+    {voucherPaymentMethod === "cash" && (
+  <div className="mt-4">
+    <label
+      htmlFor="voucherCashReceived"
+      className="mb-2 block text-sm font-bold text-slate-700"
+    >
+      Cash Received for Remaining Balance ($)
+    </label>
+
+    <input
+      id="voucherCashReceived"
+      type="number"
+      min="0"
+      step="0.01"
+      value={cashReceived}
+      onChange={(e) => setCashReceived(e.target.value)}
+      placeholder="Enter cash received"
+      required
+      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+    />
+  </div>
+)}
+  </div>
+)}
+{paymentMethod === "voucher" && (
+  <div className="space-y-4">
+    <div>
+      <label
+        htmlFor="managerUsername"
+        className="mb-2 block text-sm font-bold text-slate-700"
+      >
+        Manager Username
+      </label>
+      <input
+        id="managerUsername"
+        type="text"
+        value={managerUsername}
+        onChange={(e) => setManagerUsername(e.target.value)}
+        placeholder="Enter manager username"
+        autoComplete="off"
+        required
+        className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+      />
+    </div>
+
+    <div>
+      <label
+        htmlFor="managerPassword"
+        className="mb-2 block text-sm font-bold text-slate-700"
+      >
+        Manager Password
+      </label>
+      <input
+        id="managerPassword"
+        type="password"
+        value={managerPassword}
+        onChange={(e) => setManagerPassword(e.target.value)}
+        placeholder="Enter manager password"
+        autoComplete="off"
+        required
+        className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+      />
+    </div>
+  </div>
+)}
               {paymentMethod === "cash" && (
                 <div>
                   <label
@@ -1319,8 +1523,31 @@ function ProductCatalog() {
                 </div>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  Payment: {receipt.paymentMethod === "cash" ? "Cash" : "Card"}
-                </p>
+  Payment:{" "}
+  {receipt.paymentMethod === "voucher"
+    ? "Voucher + Split Payment"
+    : receipt.paymentMethod === "cash"
+    ? "Cash"
+    : "Card"}
+</p>
+
+{receipt.paymentMethod === "voucher" && (
+  <div className="mt-3 space-y-1 rounded-lg bg-blue-50 p-3 text-sm text-slate-700">
+    <p>
+      Voucher Amount: ${formatMoney(receipt.voucherAmount)}
+    </p>
+    <p>
+      Remaining Balance: ${formatMoney(receipt.remainingAmount)}
+    </p>
+    <p>
+      Remaining Payment Method:{" "}
+      {receipt.remainingPaymentMethod === "cash" ? "Cash" : "Card"}
+    </p>
+    <p>
+      Approved by Staff ID: {receipt.approvedByStaffId}
+    </p>
+  </div>
+)}
 
                 {receipt.change != null && (
                   <p className="mt-1 text-sm text-slate-500">

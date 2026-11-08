@@ -1,3 +1,4 @@
+import CashDrawerWarning from "./CashDrawerWarning";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CourseProductAssignment from "../components/CourseProductAssignment";
@@ -285,6 +286,7 @@ function ManagerDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-100">
+      <CashDrawerWarning />
       {/* Dashboard header */}
       <header className="border-b-4 border-red-600 bg-white shadow-sm">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">

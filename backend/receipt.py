@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from connection import create_connection
 
 
-def create_order(user_id: int, total, cart_items):
+def create_order(user_id: int, total, cart_items, voucher_payment=None):
     connection = create_connection()
 
     if not connection:
@@ -90,6 +90,28 @@ def create_order(user_id: int, total, cart_items):
                 VALUES (%s, %s, %s, %s)
                 """,
                 (order_id, product_id, quantity, price_each)
+            )
+
+        # Record voucher payment and approving manager
+        if voucher_payment is not None:
+            cursor.execute(
+                """
+                INSERT INTO voucher_payments (
+                    order_id,
+                    voucher_amount,
+                    remaining_amount,
+                    remaining_payment_method,
+                    approved_by_staff_id
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    order_id,
+                    voucher_payment["voucher_amount"],
+                    voucher_payment["remaining_amount"],
+                    voucher_payment["payment_method"],
+                    voucher_payment["approved_by_staff_id"]
+                )
             )
 
         connection.commit()
