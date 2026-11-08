@@ -48,9 +48,16 @@ export default function CourseProductAssignment() {
   const [productSearch, setProductSearch] = useState("");
   const [selectedProductId, setSelectedProductId] = useState("");
   const [managerPassword, setManagerPassword] = useState("");
+  const [newCourse, setNewCourse] = useState({
+    course_number: "",
+    course_name: "",
+    description: "",
+  });
+  const [coursePassword, setCoursePassword] = useState("");
   const [required, setRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [creatingCourse, setCreatingCourse] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -95,6 +102,51 @@ export default function CourseProductAssignment() {
     loadData();
   }, []);
 
+  async function createCourse(event) {
+    event.preventDefault();
+
+    const managerUsername = manager?.username ?? manager?.user_name;
+
+    if (!managerUsername) {
+      setError("Could not find the manager username in the saved login.");
+      return;
+    }
+
+    setCreatingCourse(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch(`${API}/courses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_name: managerUsername,
+          password: coursePassword,
+          course_number: newCourse.course_number.trim(),
+          course_name: newCourse.course_name.trim(),
+          description: newCourse.description.trim(),
+        }),
+      });
+
+      const data = await readResponse(response);
+
+      setNewCourse({
+        course_number: "",
+        course_name: "",
+        description: "",
+      });
+      setCoursePassword("");
+      setSelectedCourseId(courseId(data));
+      setNotice(data?.message || "Course created successfully.");
+      await loadData();
+    } catch (err) {
+      setError(err.message || "Unable to create course.");
+    } finally {
+      setCreatingCourse(false);
+    }
+  }
+
   const matchingCourses = useMemo(() => {
     const query = courseSearch.trim().toLowerCase();
 
@@ -107,11 +159,14 @@ export default function CourseProductAssignment() {
     (course) => courseId(course) === selectedCourseId
   );
 
-  const assignedProducts = selectedCourse?.products || [];
-  const assignedIds = new Set(assignedProducts.map(productId));
+  const assignedProducts = useMemo(
+    () => selectedCourse?.products ?? [],
+    [selectedCourse]
+  );
 
   const matchingProducts = useMemo(() => {
     const query = productSearch.trim().toLowerCase();
+    const assignedIds = new Set(assignedProducts.map(productId));
 
     return products.filter((product) => {
       const label =
@@ -120,7 +175,7 @@ export default function CourseProductAssignment() {
 
       return label.includes(query) && !assignedIds.has(productId(product));
     });
-  }, [products, productSearch, selectedCourse]);
+  }, [products, productSearch, assignedProducts]);
 
   async function assignProduct() {
     if (!selectedCourseId || !selectedProductId) {
@@ -293,6 +348,82 @@ export default function CourseProductAssignment() {
                 ))}
               </select>
             </label>
+
+            <form
+              onSubmit={createCourse}
+              className="space-y-3 rounded-xl border border-blue-100 bg-blue-50 p-4"
+            >
+              <h3 className="font-bold text-slate-800">Add a course</h3>
+
+              <label className="block text-sm font-semibold text-slate-700">
+                Course number
+                <input
+                  required
+                  maxLength={20}
+                  value={newCourse.course_number}
+                  onChange={(event) =>
+                    setNewCourse((course) => ({
+                      ...course,
+                      course_number: event.target.value,
+                    }))
+                  }
+                  placeholder="e.g. MATH 101"
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+
+              <label className="block text-sm font-semibold text-slate-700">
+                Course name
+                <input
+                  required
+                  maxLength={100}
+                  value={newCourse.course_name}
+                  onChange={(event) =>
+                    setNewCourse((course) => ({
+                      ...course,
+                      course_name: event.target.value,
+                    }))
+                  }
+                  placeholder="e.g. College Algebra"
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+
+              <label className="block text-sm font-semibold text-slate-700">
+                Description (optional)
+                <input
+                  maxLength={255}
+                  value={newCourse.description}
+                  onChange={(event) =>
+                    setNewCourse((course) => ({
+                      ...course,
+                      description: event.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+
+              <label className="block text-sm font-semibold text-slate-700">
+                Manager password
+                <input
+                  required
+                  type="password"
+                  autoComplete="current-password"
+                  value={coursePassword}
+                  onChange={(event) => setCoursePassword(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+
+              <button
+                type="submit"
+                disabled={creatingCourse}
+                className="w-full rounded-lg bg-blue-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {creatingCourse ? "Creating course…" : "Create course"}
+              </button>
+            </form>
 
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <h3 className="font-bold text-slate-800">

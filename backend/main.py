@@ -1,9 +1,10 @@
-
 from decimal import Decimal, ROUND_HALF_UP
+from datetime import date
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+from connection import create_connection
 
 
 from cart import (
@@ -27,8 +28,16 @@ from catalog import (
     add_product,
     edit_product,
     apply_low_stock_discount,
+    update_product_discount_price,
+    get_product_price_history,
     remove_product,
     get_all_courses_with_products,  
+    get_all_products_with_color,
+    get_all_colors,
+    get_product_by_id_with_color,
+    get_all_products_with_size,
+    get_all_sizes,
+    get_product_by_id_with_size,
 )
 from payment import pay_with_cash, pay_with_card
 from voucher_payment import (
@@ -115,11 +124,35 @@ class UpdateProductRequest(BaseModel):
 class ProductDiscountRequest(BaseModel):
     user_name: str
     password: str
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ProductPriceDiscountRequest(BaseModel):
+    user_name: str
+    password: str
+    new_price: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class ProductRequest(BaseModel):
     user_name: str
     password: str
+
+
+class DailyAnalyticsRequest(BaseModel):
+    user_name: str
+    password: str
+    report_date: date
+
+
+class StaffTransactionRequest(BaseModel):
+    user_name: str
+    password: str
+
+
+class StaffTransactionDiscountRequest(StaffTransactionRequest):
+    new_price: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class LoginRequest(BaseModel):
@@ -153,6 +186,7 @@ class CourseProductAssignmentRequest(BaseModel):
     user_name: str
     password: str
     required: bool = False
+
 
 @app.put("/cash-drawer/{drawer_id}/minimum")
 def set_cash_drawer_minimum(
@@ -189,6 +223,16 @@ def set_cash_drawer_minimum(
         )
 
     return result
+
+
+class CourseCreateRequest(BaseModel):
+    user_name: str
+    password: str
+    course_number: str = Field(..., min_length=1, max_length=20)
+    course_name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(default="", max_length=255)
+
+
 
 # -------------------------
 # Checkout / receipt helpers
@@ -624,6 +668,290 @@ def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
 # Manager product routes
 # -------------------------
 
+def _verify_employee(user_name: str, password: str):
+    staff_member = get_user(user_name)
+
+    if not staff_member or staff_member["password"] != password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if staff_member["role"] != "employee":
+        raise HTTPException(
+            status_code=403,
+            detail="Only staff can manage student transactions",
+        )
+
+    return staff_member
+
+
+def _get_student_transaction(student_id: str):
+    student = get_student(student_id.strip())
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found",
+        )
+
+    return student
+
+
+@app.post("/staff/transactions/{student_id}")
+def load_staff_student_transaction(
+    student_id: str,
+    request: StaffTransactionRequest,
+):
+    _verify_employee(request.user_name, request.password)
+    student = _get_student_transaction(student_id)
+    items = get_cart(student["user_id"])
+
+    return {
+        "student_id": student["student_id"],
+        "username": student["username"],
+        "cart": items,
+        "total": str(get_cart_total(student["user_id"])),
+    }
+
+
+@app.post("/staff/transactions/{student_id}/cancel")
+def cancel_staff_student_transaction(
+    student_id: str,
+    request: StaffTransactionRequest,
+):
+    _verify_employee(request.user_name, request.password)
+    student = _get_student_transaction(student_id)
+
+    if not clear_cart(student["user_id"]):
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to cancel the student transaction.",
+        )
+
+    return {"message": "Student transaction canceled successfully"}
+
+
+@app.post("/staff/transactions/{student_id}/items/{product_id}/remove")
+def remove_staff_student_transaction_item(
+    student_id: str,
+    product_id: int,
+    request: StaffTransactionRequest,
+):
+    _verify_employee(request.user_name, request.password)
+    student = _get_student_transaction(student_id)
+
+    if not remove_from_cart(student["user_id"], product_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Product was not found in the student transaction.",
+        )
+
+    return {"message": "Product removed from the student transaction"}
+
+
+@app.post("/staff/transactions/{student_id}/items/{product_id}/discount")
+def discount_staff_student_transaction_item(
+    student_id: str,
+    product_id: int,
+    request: StaffTransactionDiscountRequest,
+):
+    staff_member = _verify_employee(request.user_name, request.password)
+    student = _get_student_transaction(student_id)
+    reason = request.reason.strip()
+
+    if not reason:
+        raise HTTPException(
+            status_code=422,
+            detail="A reason is required for a transaction discount",
+        )
+
+    try:
+        result, prices = set_cart_item_discount(
+            student["user_id"],
+            product_id,
+            request.new_price,
+            reason,
+            staff_member["username"],
+        )
+    except Exception as error:
+        print(f"Error applying staff transaction discount: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to apply the transaction discount.",
+        ) from error
+
+    if result == "not_found":
+        raise HTTPException(
+            status_code=404,
+            detail="Product was not found in the student transaction.",
+        )
+
+    if result == "price_not_lower":
+        raise HTTPException(
+            status_code=409,
+            detail="The new transaction price must be lower than the current price.",
+        )
+
+    return {
+        "message": "Transaction discount applied successfully",
+        "previous_price": str(prices["previous_price"]),
+        "new_price": str(prices["new_price"]),
+    }
+
+
+@app.post("/manager/daily-analytics")
+def get_manager_daily_analytics(request: DailyAnalyticsRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view sales analytics",
+        )
+
+    connection = create_connection()
+
+    if not connection:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                o.order_id,
+                o.user_id,
+                o.total,
+                o.created_at,
+                oi.product_id,
+                COALESCE(p.name, CONCAT('Product #', oi.product_id)) AS product_name,
+                COALESCE(NULLIF(TRIM(p.category), ''), 'Uncategorized') AS category,
+                oi.quantity,
+                oi.price_each
+            FROM orders AS o
+            LEFT JOIN order_items AS oi ON oi.order_id = o.order_id
+            LEFT JOIN products AS p ON p.product_id = oi.product_id
+            WHERE DATE(o.created_at) = %s
+            ORDER BY o.created_at DESC, o.order_id DESC
+            """,
+            (request.report_date,),
+        )
+        rows = cursor.fetchall()
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load daily sales analytics.",
+        ) from error
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+    transactions_by_id = {}
+    product_totals = {}
+    category_totals = {}
+    total_revenue = Decimal("0.00")
+    units_sold = 0
+
+    for row in rows:
+        order_id = row["order_id"]
+
+        if order_id not in transactions_by_id:
+            total = Decimal(str(row["total"]))
+            total_revenue += total
+            transactions_by_id[order_id] = {
+                "order_id": order_id,
+                "user_id": row["user_id"],
+                "total": float(total),
+                "created_at": row["created_at"],
+                "items": [],
+            }
+
+        if row["product_id"] is None:
+            continue
+
+        quantity = int(row["quantity"])
+        item_revenue = Decimal(str(row["price_each"])) * quantity
+        product_id = row["product_id"]
+        product = product_totals.setdefault(
+            product_id,
+            {
+                "product_id": product_id,
+                "product_name": row["product_name"],
+                "quantity_sold": 0,
+                "revenue": Decimal("0.00"),
+            },
+        )
+        product["quantity_sold"] += quantity
+        product["revenue"] += item_revenue
+
+        category = row["category"]
+        category_total = category_totals.setdefault(
+            category,
+            {
+                "category": category,
+                "quantity_sold": 0,
+                "revenue": Decimal("0.00"),
+            },
+        )
+        category_total["quantity_sold"] += quantity
+        category_total["revenue"] += item_revenue
+        units_sold += quantity
+
+        transactions_by_id[order_id]["items"].append(
+            {
+                "product_id": product_id,
+                "product_name": row["product_name"],
+                "quantity": quantity,
+                "price_each": float(row["price_each"]),
+            }
+        )
+
+    best_sellers = sorted(
+        product_totals.values(),
+        key=lambda product: (
+            -product["quantity_sold"],
+            -product["revenue"],
+            product["product_name"].lower(),
+        ),
+    )[:5]
+
+    for product in best_sellers:
+        product["revenue"] = float(product["revenue"])
+
+    category_breakdown = sorted(
+        category_totals.values(),
+        key=lambda category: category["category"].lower(),
+    )
+
+    for category in category_breakdown:
+        category["revenue"] = float(category["revenue"])
+
+    return {
+        "report_date": request.report_date.isoformat(),
+        "summary": {
+            "transaction_count": len(transactions_by_id),
+            "total_revenue": float(total_revenue),
+            "units_sold": units_sold,
+        },
+        "category_breakdown": category_breakdown,
+        "best_sellers": best_sellers,
+        "transactions": list(transactions_by_id.values()),
+    }
+
+
 @app.delete("/products/{product_id}")
 def delete_product(product_id: int, request: DeleteProductRequest):
     manager = get_user(request.user_name)
@@ -755,7 +1083,19 @@ def discount_product(product_id: int, request: ProductDiscountRequest):
             detail="Only managers can discount products",
         )
 
-    result = apply_low_stock_discount(product_id)
+    reason = request.reason.strip()
+
+    if not reason:
+        raise HTTPException(
+            status_code=422,
+            detail="A reason is required for a product discount",
+        )
+
+    result = apply_low_stock_discount(
+        product_id,
+        reason=reason,
+        changed_by=manager["username"],
+    )
 
     if result == "not_found":
         raise HTTPException(
@@ -784,15 +1124,89 @@ def discount_product(product_id: int, request: ProductDiscountRequest):
     return {"message": "5% discount applied successfully"}
 
 
-# -------------------------
-# Course listing routes
-# -------------------------
+@app.post("/products/{product_id}/price-discount")
+def discount_product_price(
+    product_id: int,
+    request: ProductPriceDiscountRequest,
+):
+    staff_member = get_user(request.user_name)
 
-@app.get("/courses")
-def get_courses_with_products_endpoint():
-    """Return all courses and their associated products."""
-    courses = get_all_courses_with_products()
-    return courses
+    if not staff_member or staff_member["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if staff_member["role"] not in {"employee", "manager"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only employees and managers can discount product prices",
+        )
+
+    reason = request.reason.strip()
+
+    if not reason:
+        raise HTTPException(
+            status_code=422,
+            detail="A reason is required for a price discount",
+        )
+
+    result, prices = update_product_discount_price(
+        product_id,
+        request.new_price,
+        reason,
+        staff_member["username"],
+    )
+
+    if result == "not_found":
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        )
+
+    if result == "price_not_lower":
+        raise HTTPException(
+            status_code=409,
+            detail="The discounted price must be lower than the current price",
+        )
+
+    if result != "updated":
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update the product price",
+        )
+
+    return {
+        "message": "Product price discounted successfully",
+        **prices,
+    }
+
+
+@app.post("/products/price-history")
+def read_product_price_history(request: ProductRequest):
+    staff_member = get_user(request.user_name)
+
+    if not staff_member or staff_member["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if staff_member["role"] not in {"employee", "manager"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only employees and managers can view product price history",
+        )
+
+    history = get_product_price_history()
+
+    if history is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load product price history",
+        )
+
+    return history
 
 
 # -------------------------
@@ -916,10 +1330,89 @@ def _verify_course_assignment_manager(user_name: str, password: str):
     if manager.get("role") != "manager":
         raise HTTPException(
             status_code=403,
-            detail="Only managers can assign products to courses",
+            detail="Only managers can manage courses and course products",
         )
 
     return manager
+
+
+@app.post("/courses", status_code=201)
+def create_course(request: CourseCreateRequest):
+    """Create a course that managers can organize products under."""
+    _verify_course_assignment_manager(request.user_name, request.password)
+
+    course_number = request.course_number.strip()
+    course_name = request.course_name.strip()
+
+    if not course_number or not course_name:
+        raise HTTPException(
+            status_code=422,
+            detail="Course number and course name are required",
+        )
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+
+        if connection is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection failed",
+            )
+
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO courses (course_number, course_name, description)
+            VALUES (%s, %s, %s)
+            """,
+            (
+                course_number,
+                course_name,
+                request.description.strip() or None,
+            ),
+        )
+        course_id = cursor.lastrowid
+        connection.commit()
+
+        return {
+            "course_id": course_id,
+            "course_number": course_number,
+            "course_name": course_name,
+            "description": request.description.strip() or None,
+            "products": [],
+            "message": "Course created successfully",
+        }
+
+    except HTTPException:
+        if connection is not None:
+            connection.rollback()
+        raise
+
+    except Exception as error:
+        if connection is not None:
+            connection.rollback()
+
+        if getattr(error, "errno", None) == 1062:
+            raise HTTPException(
+                status_code=409,
+                detail="A course with that course number already exists",
+            )
+
+        print(f"Error creating course: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create course",
+        )
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+        if connection is not None:
+            connection.close()
 
 
 @app.post("/courses/{course_id}/products/{product_id}")
@@ -1110,3 +1603,48 @@ def remove_product_from_course(
 
         if connection is not None:
             connection.close()
+#gets all available colors
+@app.get("/colors")
+def get_colors():
+    return get_all_colors()
+
+#gets all colors assigned to a product
+@app.get("/products/with-colors")
+def get_product_color():
+    return get_all_products_with_color()
+
+#gets a product assigned to a color
+@app.get("/products/{product_id}/colors")
+def read_product_by_id_with_color(product_id: int):
+    product = get_product_by_id_with_color(product_id)
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or no colors assigned"
+
+        )
+    return product
+
+
+#gets all available sizes
+@app.get("/sizes")
+def get_sizes():
+    return get_all_sizes()
+
+#gets all sizes assigned to a product
+@app.get("/products/with-sizes")
+def get_product_size():
+    return get_all_products_with_size()
+
+#gets a product with its assigned sizes
+@app.get("/products/{product_id}/sizes")
+def read_product_by_id_with_size(product_id: int):
+    product = get_product_by_id_with_size(product_id)
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found or no sizes assigned"
+        )
+    return product

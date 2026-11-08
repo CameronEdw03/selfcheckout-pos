@@ -53,5 +53,6 @@ VALUES
 (9, 'sophia.thomas', 'testpassword', 'student', 'S10008'),
 (10, 'mason.jackson', 'testpassword', 'student', 'S10009'),
 
-(11, 'mia.harris', 'testpassword', 'student', 'S10010');
+(11, 'mia.harris', 'testpassword', 'student', 'S10010'),
+(12, '123Staff', 'testpassword', 'employee', NULL);
 
