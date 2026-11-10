@@ -2,7 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import date
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from fastapi.middleware.cors import CORSMiddleware
 from connection import create_connection
 
@@ -135,6 +135,25 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class StudentRegistrationRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=8, max_length=255)
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=30)
+
+
+class StudentProfileUpdateRequest(BaseModel):
+    current_username: str
+    current_password: str
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=30)
+    new_password: str | None = Field(default=None, min_length=8, max_length=255)
+
+
 class UpdateQuantityRequest(BaseModel):
     quantity: int
 
@@ -164,6 +183,13 @@ class CourseCreateRequest(BaseModel):
     course_number: str = Field(..., min_length=1, max_length=20)
     course_name: str = Field(..., min_length=1, max_length=100)
     description: str = Field(default="", max_length=255)
+
+
+class SupplyBundleCreateRequest(BaseModel):
+    user_name: str
+    password: str
+    bundle_name: str = Field(..., min_length=1, max_length=100)
+    product_ids: list[int] = Field(..., min_length=1, max_length=100)
 
 
 # -------------------------
@@ -354,7 +380,217 @@ def login(request: LoginRequest):
         "username": user["username"],
         "role": user["role"],
         "student_id": user["student_id"],
+        "first_name": user.get("first_name"),
+        "last_name": user.get("last_name"),
+        "email": user.get("email"),
+        "phone": user.get("phone"),
     }
+
+
+@app.post("/auth/register", status_code=201)
+def register_student(request: StudentRegistrationRequest):
+    """Create a student account without allowing self-assigned staff roles."""
+    username = request.username.strip()
+    first_name = request.first_name.strip()
+    last_name = request.last_name.strip()
+    email = str(request.email).strip() if request.email else None
+    phone = request.phone.strip() if request.phone else None
+
+    if not username or not first_name or not last_name:
+        raise HTTPException(
+            status_code=422,
+            detail="Username, first name, and last name cannot be blank",
+        )
+
+    connection = create_connection()
+
+    if connection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO users
+                (username, password, role, first_name, last_name, email, phone)
+            VALUES (%s, %s, 'student', %s, %s, %s, %s)
+            """,
+            (
+                username,
+                request.password,
+                first_name,
+                last_name,
+                email or None,
+                phone or None,
+            ),
+        )
+        user_id = cursor.lastrowid
+        student_id = f"S{user_id}"
+        cursor.execute(
+            "UPDATE users SET student_id = %s WHERE user_id = %s",
+            (student_id, user_id),
+        )
+        connection.commit()
+
+        return {
+            "message": "Student account created successfully",
+            "user_id": user_id,
+            "username": username,
+            "role": "student",
+            "student_id": student_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email or None,
+            "phone": phone or None,
+        }
+
+    except Exception as error:
+        connection.rollback()
+        error_code = getattr(error, "errno", None)
+
+        if error_code == 1062:
+            database_message = str(getattr(error, "msg", error)).lower()
+            if "username" in database_message:
+                detail = "That username is already registered. Choose another username."
+            else:
+                detail = (
+                    "That username or generated Student ID is already in use. "
+                    "Contact a manager if this continues."
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=detail,
+            ) from error
+
+        if error_code in {1054, 1364}:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "The database is missing fields required for student registration. "
+                    "Apply migrations 011_enable_student_registration.sql and "
+                    "012_add_student_profile_fields.sql, then restart the backend."
+                ),
+            ) from error
+
+        if error_code == 1146:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "The users table is missing. Initialize the database with "
+                    "backend/database/schema.sql, then apply migrations 011 and 012."
+                ),
+            ) from error
+
+        print(f"Error registering student: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the student account.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
+
+
+@app.put("/students/profile")
+def update_student_profile(request: StudentProfileUpdateRequest):
+    """Update student profile details without allowing student ID changes."""
+    current_user = get_user(request.current_username)
+
+    if not current_user or current_user.get("password") != request.current_password:
+        raise HTTPException(
+            status_code=401,
+            detail="Current username or password is incorrect.",
+        )
+
+    if current_user.get("role") != "student":
+        raise HTTPException(
+            status_code=403,
+            detail="Only student accounts can update a student profile.",
+        )
+
+    first_name = request.first_name.strip()
+    last_name = request.last_name.strip()
+    email = str(request.email).strip() if request.email else None
+    phone = request.phone.strip() if request.phone else None
+
+    if not first_name or not last_name:
+        raise HTTPException(
+            status_code=422,
+            detail="First name and last name cannot be blank",
+        )
+
+    connection = create_connection()
+
+    if connection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            UPDATE users
+            SET first_name = %s,
+                last_name = %s,
+                email = %s,
+                phone = %s,
+                password = COALESCE(%s, password)
+            WHERE user_id = %s
+              AND role = 'student'
+            """,
+            (
+                first_name,
+                last_name,
+                email or None,
+                phone or None,
+                request.new_password or None,
+                current_user["user_id"],
+            ),
+        )
+        connection.commit()
+
+        return {
+            "message": "Profile updated successfully",
+            "user_id": current_user["user_id"],
+            "username": current_user["username"],
+            "role": "student",
+            "student_id": current_user["student_id"],
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email or None,
+            "phone": phone or None,
+        }
+
+    except Exception as error:
+        connection.rollback()
+
+        if getattr(error, "errno", None) == 1062:
+            raise HTTPException(
+                status_code=409,
+                detail="Unable to update the profile because a value is already in use.",
+            ) from error
+
+        print(f"Error updating student profile: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update the student profile.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
 
 
 @app.get("/user")
@@ -1368,10 +1604,88 @@ def get_courses_with_products_endpoint():
     if courses is None:
         raise HTTPException(
             status_code=500,
-            detail="Error retrieving courses",
+            detail=(
+                "Unable to retrieve courses. Check the backend database "
+                "connection and apply migration "
+                "007_add_course_product_assignments.sql."
+            ),
         )
 
     return courses
+
+
+@app.get("/bundles")
+def get_supply_bundles():
+    """Return each supply bundle and its catalog products."""
+    connection = create_connection()
+
+    if connection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                b.bundle_id,
+                b.bundle_name,
+                p.product_id,
+                p.name AS product_name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category
+            FROM supply_bundles AS b
+            LEFT JOIN supply_bundle_products AS bp
+                ON bp.bundle_id = b.bundle_id
+            LEFT JOIN products AS p
+                ON p.product_id = bp.product_id
+            ORDER BY b.bundle_name, p.name
+            """
+        )
+
+        bundles_by_id = {}
+        for row in cursor.fetchall():
+            bundle_id = row["bundle_id"]
+            bundle = bundles_by_id.setdefault(
+                bundle_id,
+                {
+                    "bundle_id": bundle_id,
+                    "bundle_name": row["bundle_name"],
+                    "products": [],
+                },
+            )
+
+            if row["product_id"] is not None:
+                bundle["products"].append(
+                    {
+                        "product_id": row["product_id"],
+                        "name": row["product_name"],
+                        "description": row["description"],
+                        "price": float(row["price"]),
+                        "quantity": row["quantity"],
+                        "category": row["category"],
+                    }
+                )
+
+        return list(bundles_by_id.values())
+
+    except Exception as error:
+        print(f"Error retrieving supply bundles: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load supply bundles.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
 
 
 def _verify_course_assignment_manager(user_name: str, password: str):
@@ -1387,10 +1701,115 @@ def _verify_course_assignment_manager(user_name: str, password: str):
     if manager.get("role") != "manager":
         raise HTTPException(
             status_code=403,
-            detail="Only managers can manage courses and course products",
+            detail=(
+                "Only managers can manage courses, supply bundles, "
+                "and course products"
+            ),
         )
 
     return manager
+
+
+@app.post("/bundles", status_code=201)
+def create_supply_bundle(request: SupplyBundleCreateRequest):
+    """Create a named bundle from existing catalog products."""
+    _verify_course_assignment_manager(request.user_name, request.password)
+
+    bundle_name = request.bundle_name.strip()
+    product_ids = list(dict.fromkeys(request.product_ids))
+
+    if not bundle_name:
+        raise HTTPException(
+            status_code=422,
+            detail="Bundle name cannot be blank",
+        )
+
+    if any(product_id <= 0 for product_id in product_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="Product IDs must be positive integers",
+        )
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+
+        if connection is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection failed",
+            )
+
+        cursor = connection.cursor(dictionary=True)
+        placeholders = ", ".join(["%s"] * len(product_ids))
+        cursor.execute(
+            f"SELECT product_id FROM products WHERE product_id IN ({placeholders})",
+            tuple(product_ids),
+        )
+        found_product_ids = {row["product_id"] for row in cursor.fetchall()}
+        missing_product_ids = set(product_ids) - found_product_ids
+
+        if missing_product_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Unknown product IDs: "
+                    + ", ".join(map(str, sorted(missing_product_ids)))
+                ),
+            )
+
+        cursor.execute(
+            "INSERT INTO supply_bundles (bundle_name) VALUES (%s)",
+            (bundle_name,),
+        )
+        bundle_id = cursor.lastrowid
+        cursor.executemany(
+            """
+            INSERT INTO supply_bundle_products (bundle_id, product_id)
+            VALUES (%s, %s)
+            """,
+            [(bundle_id, product_id) for product_id in product_ids],
+        )
+        connection.commit()
+
+        return {
+            "bundle_id": bundle_id,
+            "bundle_name": bundle_name,
+            "products": [
+                {"product_id": product_id}
+                for product_id in product_ids
+            ],
+            "message": "Supply bundle created successfully",
+        }
+
+    except HTTPException:
+        if connection is not None:
+            connection.rollback()
+        raise
+
+    except Exception as error:
+        if connection is not None:
+            connection.rollback()
+
+        if getattr(error, "errno", None) == 1062:
+            raise HTTPException(
+                status_code=409,
+                detail="A supply bundle with that name already exists",
+            ) from error
+
+        print(f"Error creating supply bundle: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create supply bundle.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None:
+            connection.close()
 
 
 @app.post("/courses", status_code=201)

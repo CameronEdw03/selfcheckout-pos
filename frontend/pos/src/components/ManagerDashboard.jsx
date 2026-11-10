@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CourseProductAssignment from "../components/CourseProductAssignment";
 import StaffActivityDashboard from "../components/StaffActivityDashboard";
+import SupplyBundleManagement from "../components/SupplyBundleManagement";
 
 const API = "http://127.0.0.1:8000";
 
@@ -860,6 +861,8 @@ function ManagerDashboard() {
         <div className="mt-8">
           <CourseProductAssignment />
         </div>
+
+        <SupplyBundleManagement />
 
         {/* Product inventory */}
         <section className="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
