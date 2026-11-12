@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CourseProductAssignment from "../components/CourseProductAssignment";
+import BestSellersReport from "../components/BestSellersReport";
+import WeeklyCategorySales from "../components/WeeklyCategorySales";
+import MultiItemPricing from "../components/MultiItemPricing";
 import StaffActivityDashboard from "../components/StaffActivityDashboard";
 import SupplyBundleManagement from "../components/SupplyBundleManagement";
 
@@ -726,6 +729,15 @@ function ManagerDashboard() {
             </>
           )}
         </section>
+
+        {/* Best sellers by date range */}
+        <BestSellersReport currentUser={currentUser} />
+
+        {/* Weekly exam supplies (or any category) */}
+        <WeeklyCategorySales currentUser={currentUser} categories={categories} />
+
+        {/* Multi-item pricing deals */}
+        <MultiItemPricing currentUser={currentUser} products={products} />
 
         {/* Staff activity */}
         <StaffActivityDashboard currentUser={currentUser} />

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import StaffPriceCorrection from "./StaffPriceCorrection";
 
 const API = "http://127.0.0.1:8000";
 
@@ -202,6 +203,8 @@ function ProductCatalog() {
   const [currentUser, setCurrentUser] = useState(null);
 
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isPriceCorrectionOpen, setIsPriceCorrectionOpen] = useState(false);
+  const [activeDeals, setActiveDeals] = useState({});
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [priceDiscountProduct, setPriceDiscountProduct] = useState(null);
@@ -401,6 +404,36 @@ function ProductCatalog() {
     };
   }, []);
 
+  // Load today's multi-item deals ("3 for $5") so product cards can show them.
+  // The cart and checkout apply deals on the backend; this is display only.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDeals() {
+      try {
+        const response = await fetch(`${API}/deals/active`);
+        const data = await readResponse(response);
+
+        if (!cancelled && Array.isArray(data)) {
+          const byProduct = {};
+          for (const deal of data) {
+            const productId = Number(deal.product_id);
+            byProduct[productId] = [...(byProduct[productId] ?? []), deal];
+          }
+          setActiveDeals(byProduct);
+        }
+      } catch {
+        // Deals are optional on the catalog; regular prices still work.
+      }
+    }
+
+    loadDeals();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Load courses. The GET /courses endpoint should return each course
   // with a products array containing its assigned products.
   useEffect(() => {
@@ -584,6 +617,11 @@ function ProductCatalog() {
 
   const cartTotal = cartLines.reduce(
     (total, item) => total + item.lineTotal,
+    0
+  );
+
+  const cartDealSavings = cartLines.reduce(
+    (total, item) => total + Number(item.deal_savings ?? 0),
     0
   );
 
@@ -1020,6 +1058,8 @@ function ProductCatalog() {
       quantity: item.quantity,
       unit_price: item.unitPrice,
       line_total: item.lineTotal,
+      deal_label: item.deal_label ?? null,
+      deal_savings: Number(item.deal_savings ?? 0),
     }));
 
     const enteredStudentId = studentId.trim();
@@ -1140,7 +1180,10 @@ function ProductCatalog() {
       `Date: ${receipt.date}`,
       ...receipt.items.map(
         (item) =>
-          `${item.name} x${item.quantity} - $${formatMoney(item.line_total)}`
+          `${item.name} x${item.quantity} - $${formatMoney(item.line_total)}` +
+          (item.deal_label
+            ? ` (${item.deal_label}, saved $${formatMoney(item.deal_savings)})`
+            : "")
       ),
       `Subtotal: $${formatMoney(receipt.subtotal)}`,
       receipt.studentDiscountApplied
@@ -1322,8 +1365,36 @@ function ProductCatalog() {
                                     {item.category}
                                   </p>
                                   <p className="mt-1 text-sm font-semibold text-blue-950">
+                                    {item.discount_reason &&
+                                      Number(item.price) > item.unitPrice && (
+                                        <span className="mr-1 font-normal text-slate-400 line-through">
+                                          ${formatMoney(item.price)}
+                                        </span>
+                                      )}
                                     ${formatMoney(item.unitPrice)} each
                                   </p>
+                                  {item.discount_reason && !item.deal_label && (
+                                    <p className="mt-1 inline-block rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-800">
+                                      Sale price applied by staff
+                                    </p>
+                                  )}
+                                  {item.deal_label && (
+                                    <p className="mt-1 inline-block rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-800">
+                                      {item.deal_label} · You save $
+                                      {formatMoney(item.deal_savings)}
+                                    </p>
+                                  )}
+                                  {!item.deal_label &&
+                                    (activeDeals[item.product_id] ?? []).map(
+                                      (deal) => (
+                                        <p
+                                          key={deal.deal_id}
+                                          className="mt-1 text-xs font-semibold text-green-700"
+                                        >
+                                          Deal available: {deal.label}
+                                        </p>
+                                      )
+                                    )}
                                 </div>
 
                                 <button
@@ -1375,7 +1446,12 @@ function ProductCatalog() {
                                   </button>
                                 </div>
 
-                                <span className="text-sm font-black text-blue-950">
+                                <span className="text-right text-sm font-black text-blue-950">
+                                  {item.deal_label && (
+                                    <span className="block text-xs font-normal text-slate-400 line-through">
+                                      ${formatMoney(item.regular_line_total)}
+                                    </span>
+                                  )}
                                   ${formatMoney(item.lineTotal)}
                                 </span>
                               </div>
@@ -1392,6 +1468,12 @@ function ProductCatalog() {
                               <span className="text-xl font-black text-blue-950">
                                 ${formatMoney(cartTotal)}
                               </span>
+                              {cartDealSavings > 0 && (
+                                <span className="block text-xs font-semibold text-green-700">
+                                  Multi-item savings: $
+                                  {formatMoney(cartDealSavings)}
+                                </span>
+                              )}
                             </div>
                             <button
                               type="button"
@@ -1411,6 +1493,17 @@ function ProductCatalog() {
                           >
                             Proceed to Checkout
                           </button>
+
+                          {currentUser?.role !== "employee" && (
+                            <button
+                              type="button"
+                              onClick={() => setIsPriceCorrectionOpen(true)}
+                              className="mt-3 w-full text-center text-xs font-semibold text-slate-500 underline-offset-2 hover:text-blue-900 hover:underline"
+                            >
+                              Item on sale but scanned wrong? Staff price
+                              correction
+                            </button>
+                          )}
                         </div>
                       </>
                     )}
@@ -2102,6 +2195,19 @@ function ProductCatalog() {
                       {product.name}
                     </h3>
 
+                    {(activeDeals[productId] ?? []).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {activeDeals[productId].map((deal) => (
+                          <span
+                            key={deal.deal_id}
+                            className="rounded-md bg-green-600 px-2 py-0.5 text-xs font-black uppercase tracking-wide text-white"
+                          >
+                            {deal.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
                     <p className="mt-2 min-h-10 text-sm leading-5 text-slate-500">
                       {product.description}
                     </p>
@@ -2394,6 +2500,15 @@ function ProductCatalog() {
         </div>
       )}
 
+      {isPriceCorrectionOpen && currentUser?.user_id && (
+        <StaffPriceCorrection
+          userId={currentUser.user_id}
+          cartLines={cartLines}
+          onApplied={refreshCart}
+          onClose={() => setIsPriceCorrectionOpen(false)}
+        />
+      )}
+
       {isCheckoutOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6">
           <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-2xl">
@@ -2428,11 +2543,26 @@ function ProductCatalog() {
                     >
                       <span>
                         {item.name} × {item.quantity}
+                        {item.deal_label && (
+                          <span className="block text-xs font-semibold text-green-700">
+                            {item.deal_label} (−${formatMoney(item.deal_savings)})
+                          </span>
+                        )}
                       </span>
                       <span>${formatMoney(item.lineTotal)}</span>
                     </div>
                   ))}
                 </div>
+
+                {currentUser?.role !== "employee" && (
+                  <button
+                    type="button"
+                    onClick={() => setIsPriceCorrectionOpen(true)}
+                    className="mt-3 text-xs font-semibold text-blue-900 underline-offset-2 hover:underline"
+                  >
+                    Sale price didn&apos;t scan? Ask an employee to correct it
+                  </button>
+                )}
               </div>
 
               <div>
@@ -2598,6 +2728,12 @@ function ProductCatalog() {
                   >
                     <span className="text-slate-700">
                       {item.name} × {item.quantity}
+                      {item.deal_label && (
+                        <span className="block text-xs font-semibold text-green-700">
+                          {item.deal_label} · saved $
+                          {formatMoney(item.deal_savings)}
+                        </span>
+                      )}
                     </span>
                     <span className="font-semibold text-slate-900">
                       ${formatMoney(item.line_total)}
