@@ -1,10 +1,18 @@
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from fastapi.middleware.cors import CORSMiddleware
 from connection import create_connection
+from pricing import (
+    DEAL_TYPES,
+    create_deal,
+    get_active_deals,
+    list_deals,
+    set_deal_active,
+    split_line_into_order_rows,
+)
 
 
 from cart import (
@@ -111,6 +119,43 @@ class DailyAnalyticsRequest(BaseModel):
     user_name: str
     password: str
     report_date: date
+
+
+class BestSellersRequest(BaseModel):
+    user_name: str
+    password: str
+    start_date: date
+    end_date: date
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class CategoryWeeklySalesRequest(BaseModel):
+    user_name: str
+    password: str
+    start_date: date
+    end_date: date
+    category: str = Field(default="Exam Supplies", min_length=1, max_length=50)
+
+
+class ManagerAuthRequest(BaseModel):
+    user_name: str
+    password: str
+
+
+class CreateDealRequest(ManagerAuthRequest):
+    product_id: int = Field(gt=0)
+    deal_type: str
+    quantity: int = Field(ge=1, le=100)
+    free_quantity: int | None = Field(default=None, ge=1, le=100)
+    bundle_price: Decimal | None = Field(
+        default=None, gt=0, max_digits=10, decimal_places=2
+    )
+    starts_on: date | None = None
+    ends_on: date | None = None
+
+
+class SetDealActiveRequest(ManagerAuthRequest):
+    is_active: bool
 
 
 class StaffTransactionRequest(BaseModel):
@@ -266,15 +311,42 @@ def calculate_checkout_totals(user_id: int, student_id: str | None = None):
             rounding=ROUND_HALF_UP,
         )
 
+        category = str(item.get("category", "")).strip().lower()
+        student_books_discount = bool(valid_student) and category == "books"
+
+        if item.get("deal_id"):
+            # A multi-item deal is applied: price the whole line, not per unit.
+            item_subtotal = Decimal(str(item["line_total"])).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+            line_final = item_subtotal
+
+            if student_books_discount:
+                line_final = (item_subtotal * Decimal("0.90")).quantize(
+                    Decimal("0.01"),
+                    rounding=ROUND_HALF_UP,
+                )
+
+            subtotal += item_subtotal
+            final_total += line_final
+            # Split into rows whose cents add up exactly to the line total.
+            order_items.extend(
+                split_line_into_order_rows(
+                    int(item["product_id"]),
+                    quantity,
+                    line_final,
+                )
+            )
+            continue
+
         item_subtotal = unit_price * quantity
         subtotal += item_subtotal
 
         final_unit_price = unit_price
 
         # Apply the student discount only to Books.
-        category = str(item.get("category", "")).strip().lower()
-
-        if valid_student and category == "books":
+        if student_books_discount:
             final_unit_price = (
                 unit_price * Decimal("0.90")
             ).quantize(
@@ -939,14 +1011,13 @@ def remove_staff_student_transaction_item(
     return {"message": "Product removed from the student transaction"}
 
 
-@app.post("/staff/transactions/{student_id}/items/{product_id}/discount")
-def discount_staff_student_transaction_item(
-    student_id: str,
+def _apply_staff_cart_discount(
+    user_id: int,
     product_id: int,
     request: StaffTransactionDiscountRequest,
 ):
+    """Verify the employee, then lower one cart item's price (audited)."""
     staff_member = _verify_employee(request.user_name, request.password)
-    student = _get_student_transaction(student_id)
     reason = request.reason.strip()
 
     if not reason:
@@ -957,7 +1028,7 @@ def discount_staff_student_transaction_item(
 
     try:
         result, prices = set_cart_item_discount(
-            student["user_id"],
+            user_id,
             product_id,
             request.new_price,
             reason,
@@ -987,6 +1058,27 @@ def discount_staff_student_transaction_item(
         "previous_price": str(prices["previous_price"]),
         "new_price": str(prices["new_price"]),
     }
+
+
+@app.post("/staff/transactions/{student_id}/items/{product_id}/discount")
+def discount_staff_student_transaction_item(
+    student_id: str,
+    product_id: int,
+    request: StaffTransactionDiscountRequest,
+):
+    student = _get_student_transaction(student_id)
+    return _apply_staff_cart_discount(student["user_id"], product_id, request)
+
+
+# Used at the self-checkout screen: an employee walks up to the customer's
+# kiosk and corrects the price of an item that scanned without its sale price.
+@app.post("/cart/{user_id}/items/{product_id}/staff-discount")
+def staff_discount_cart_item(
+    user_id: int,
+    product_id: int,
+    request: StaffTransactionDiscountRequest,
+):
+    return _apply_staff_cart_discount(user_id, product_id, request)
 
 
 @app.post("/manager/staff-activity")
@@ -1090,6 +1182,445 @@ def get_manager_staff_activity(request: StaffActivityRequest):
         },
         "staff_breakdown": staff_breakdown,
         "activities": activities,
+    }
+
+
+def _week_start(day: date) -> date:
+    """Monday of the week containing ``day``."""
+    return day - timedelta(days=day.weekday())
+
+
+@app.post("/manager/category-weekly-sales")
+def get_manager_category_weekly_sales(request: CategoryWeeklySalesRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view sales analytics",
+        )
+
+    if request.end_date < request.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    category = request.category.strip()
+    first_week = _week_start(request.start_date)
+    last_week = _week_start(request.end_date)
+    # Always report whole weeks (Monday through Sunday).
+    range_start = first_week
+    range_end = last_week + timedelta(days=7)
+
+    if (range_end - range_start).days > 7 * 104:
+        raise HTTPException(
+            status_code=422,
+            detail="Please choose a range of two years or less.",
+        )
+
+    connection = create_connection()
+
+    if not connection:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                product_id,
+                name,
+                price,
+                quantity AS in_stock
+            FROM products
+            WHERE LOWER(TRIM(category)) = LOWER(%s)
+            ORDER BY name
+            """,
+            (category,),
+        )
+        category_products = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT
+                DATE_SUB(DATE(o.created_at), INTERVAL WEEKDAY(o.created_at) DAY)
+                    AS week_start,
+                oi.product_id,
+                SUM(oi.quantity) AS quantity_sold,
+                SUM(oi.quantity * oi.price_each) AS revenue,
+                COUNT(DISTINCT o.order_id) AS order_count
+            FROM orders AS o
+            JOIN order_items AS oi ON oi.order_id = o.order_id
+            JOIN products AS p ON p.product_id = oi.product_id
+            WHERE o.created_at >= %s AND o.created_at < %s
+              AND LOWER(TRIM(p.category)) = LOWER(%s)
+            GROUP BY week_start, oi.product_id
+            """,
+            (range_start, range_end, category),
+        )
+        rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT
+                DATE_SUB(DATE(o.created_at), INTERVAL WEEKDAY(o.created_at) DAY)
+                    AS week_start,
+                COUNT(DISTINCT o.order_id) AS order_count
+            FROM orders AS o
+            JOIN order_items AS oi ON oi.order_id = o.order_id
+            JOIN products AS p ON p.product_id = oi.product_id
+            WHERE o.created_at >= %s AND o.created_at < %s
+              AND LOWER(TRIM(p.category)) = LOWER(%s)
+            GROUP BY week_start
+            """,
+            (range_start, range_end, category),
+        )
+        orders_by_week = {
+            row["week_start"]: int(row["order_count"] or 0)
+            for row in cursor.fetchall()
+        }
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load weekly category sales.",
+        ) from error
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+    # Build every week in the range, so weeks with no sales show as zero.
+    weeks = {}
+    week = first_week
+    while week <= last_week:
+        weeks[week] = {
+            "week_start": week.isoformat(),
+            "week_end": (week + timedelta(days=6)).isoformat(),
+            "quantity_sold": 0,
+            "revenue": Decimal("0.00"),
+            "order_count": orders_by_week.get(week, 0),
+            "products": {},
+        }
+        week += timedelta(days=7)
+
+    product_totals = {
+        product["product_id"]: {
+            "product_id": product["product_id"],
+            "product_name": product["name"],
+            "price": float(product["price"]),
+            "in_stock": int(product["in_stock"] or 0),
+            "quantity_sold": 0,
+            "revenue": Decimal("0.00"),
+        }
+        for product in category_products
+    }
+
+    for row in rows:
+        week_start = row["week_start"]
+        if week_start not in weeks:
+            continue
+
+        quantity = int(row["quantity_sold"] or 0)
+        revenue = Decimal(str(row["revenue"] or 0))
+        product_id = row["product_id"]
+
+        bucket = weeks[week_start]
+        bucket["quantity_sold"] += quantity
+        bucket["revenue"] += revenue
+        bucket["products"][str(product_id)] = quantity
+
+        if product_id in product_totals:
+            product_totals[product_id]["quantity_sold"] += quantity
+            product_totals[product_id]["revenue"] += revenue
+
+    week_list = []
+    for bucket in weeks.values():
+        bucket["revenue"] = float(bucket["revenue"])
+        week_list.append(bucket)
+
+    product_list = sorted(
+        product_totals.values(),
+        key=lambda product: (
+            -product["quantity_sold"],
+            product["product_name"].lower(),
+        ),
+    )
+    for product in product_list:
+        product["revenue"] = float(product["revenue"])
+
+    week_count = len(week_list) or 1
+    total_units = sum(bucket["quantity_sold"] for bucket in week_list)
+
+    return {
+        "category": category,
+        "start_date": range_start.isoformat(),
+        "end_date": (range_end - timedelta(days=1)).isoformat(),
+        "summary": {
+            "week_count": len(week_list),
+            "units_sold": total_units,
+            "total_revenue": sum(bucket["revenue"] for bucket in week_list),
+            "average_units_per_week": round(total_units / week_count, 1),
+        },
+        "weeks": week_list,
+        "products": product_list,
+    }
+
+
+# -------------------------
+# Multi-item pricing (deals)
+# -------------------------
+
+def _verify_manager(user_name: str, password: str):
+    manager = get_user(user_name)
+
+    if not manager or manager["password"] != password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can manage multi-item pricing",
+        )
+
+    return manager
+
+
+# Public: deals running today, so the catalog can show "3 for $5" badges.
+@app.get("/deals/active")
+def get_todays_deals():
+    deals = get_active_deals()
+    return [deal for product_deals in deals.values() for deal in product_deals]
+
+
+@app.post("/manager/deals/list")
+def get_manager_deals(request: ManagerAuthRequest):
+    _verify_manager(request.user_name, request.password)
+    deals = list_deals()
+
+    if deals is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load multi-item deals.",
+        )
+
+    return deals
+
+
+@app.post("/manager/deals", status_code=201)
+def create_manager_deal(request: CreateDealRequest):
+    manager = _verify_manager(request.user_name, request.password)
+
+    if request.deal_type not in DEAL_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="Deal type must be bundle_price or buy_get_free.",
+        )
+
+    if request.deal_type == "bundle_price":
+        if request.quantity < 2:
+            raise HTTPException(
+                status_code=422,
+                detail="A bundle price deal needs a quantity of at least 2.",
+            )
+        if request.bundle_price is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Enter the bundle price (for example 3 for $5.00).",
+            )
+
+    if request.deal_type == "buy_get_free" and request.free_quantity is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Enter how many items are free.",
+        )
+
+    if (
+        request.starts_on
+        and request.ends_on
+        and request.ends_on < request.starts_on
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    try:
+        status, deal_id = create_deal(
+            request.product_id,
+            request.deal_type,
+            request.quantity,
+            request.free_quantity,
+            request.bundle_price,
+            request.starts_on,
+            request.ends_on,
+            manager["username"],
+        )
+    except Exception as error:
+        print(f"Error creating multi-item deal: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the deal.",
+        ) from error
+
+    if status == "product_not_found":
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    if status == "no_savings":
+        raise HTTPException(
+            status_code=409,
+            detail="The bundle price must be lower than buying the items separately.",
+        )
+
+    return {"message": "Deal created successfully", "deal_id": deal_id}
+
+
+@app.post("/manager/deals/{deal_id}/active")
+def set_manager_deal_active(deal_id: int, request: SetDealActiveRequest):
+    _verify_manager(request.user_name, request.password)
+
+    try:
+        found = set_deal_active(deal_id, request.is_active)
+    except Exception as error:
+        print(f"Error updating multi-item deal: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update the deal.",
+        ) from error
+
+    if not found:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    return {
+        "message": "Deal resumed" if request.is_active else "Deal paused",
+    }
+
+
+@app.post("/manager/best-sellers")
+def get_manager_best_sellers(request: BestSellersRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view sales analytics",
+        )
+
+    if request.end_date < request.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    connection = create_connection()
+
+    if not connection:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    # Half-open range [start, end + 1 day) so the whole end date is included
+    # and an index on orders.created_at can still be used.
+    range_start = request.start_date
+    range_end = request.end_date + timedelta(days=1)
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                oi.product_id,
+                COALESCE(p.name, CONCAT('Product #', oi.product_id)) AS product_name,
+                COALESCE(NULLIF(TRIM(p.category), ''), 'Uncategorized') AS category,
+                SUM(oi.quantity) AS quantity_sold,
+                SUM(oi.quantity * oi.price_each) AS revenue,
+                COUNT(DISTINCT o.order_id) AS order_count
+            FROM orders AS o
+            JOIN order_items AS oi ON oi.order_id = o.order_id
+            LEFT JOIN products AS p ON p.product_id = oi.product_id
+            WHERE o.created_at >= %s AND o.created_at < %s
+            GROUP BY oi.product_id, product_name, category
+            ORDER BY quantity_sold DESC, revenue DESC, product_name ASC
+            """,
+            (range_start, range_end),
+        )
+        rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS transaction_count
+            FROM orders
+            WHERE created_at >= %s AND created_at < %s
+            """,
+            (range_start, range_end),
+        )
+        transaction_count = int(cursor.fetchone()["transaction_count"] or 0)
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load best-selling products.",
+        ) from error
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+    units_sold = sum(int(row["quantity_sold"] or 0) for row in rows)
+    total_revenue = sum(
+        (Decimal(str(row["revenue"] or 0)) for row in rows),
+        Decimal("0.00"),
+    )
+
+    best_sellers = []
+    for rank, row in enumerate(rows[: request.limit], start=1):
+        quantity = int(row["quantity_sold"] or 0)
+        best_sellers.append(
+            {
+                "rank": rank,
+                "product_id": row["product_id"],
+                "product_name": row["product_name"],
+                "category": row["category"],
+                "quantity_sold": quantity,
+                "revenue": float(Decimal(str(row["revenue"] or 0))),
+                "order_count": int(row["order_count"] or 0),
+                "share_of_units": (
+                    round(quantity / units_sold * 100, 1) if units_sold else 0
+                ),
+            }
+        )
+
+    return {
+        "start_date": request.start_date.isoformat(),
+        "end_date": request.end_date.isoformat(),
+        "summary": {
+            "transaction_count": transaction_count,
+            "units_sold": units_sold,
+            "total_revenue": float(total_revenue),
+            "distinct_products": len(rows),
+        },
+        "best_sellers": best_sellers,
     }
 
 

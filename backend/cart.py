@@ -2,6 +2,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 
 from connection import create_connection
+from pricing import apply_deals_to_cart
 
 
 def set_cart_item_discount(user_id, product_id, new_price, reason, changed_by):
@@ -336,7 +337,8 @@ def get_cart(user_id):
             (user_id,)
         )
 
-        return cursor.fetchall()
+        # Apply manager-configured multi-item deals ("3 for $5", etc.).
+        return apply_deals_to_cart(cursor.fetchall())
 
     except Exception as error:
         print(f"Error getting cart: {error}")
