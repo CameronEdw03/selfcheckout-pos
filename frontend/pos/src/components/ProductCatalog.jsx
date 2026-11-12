@@ -157,6 +157,10 @@ function getCourseId(course) {
   return String(course?.course_id ?? course?.id ?? "");
 }
 
+function getBundleId(bundle) {
+  return String(bundle?.bundle_id ?? bundle?.id ?? "");
+}
+
 async function readResponse(response) {
   const text = await response.text();
 
@@ -192,6 +196,8 @@ function ProductCatalog() {
   const [pendingSizeId, setPendingSizeId] = useState("");
   const [courses, setCourses] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [bundles, setBundles] = useState([]);
+  const [selectedBundleId, setSelectedBundleId] = useState("");
   const [cartItems, setCartItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
 
@@ -226,6 +232,8 @@ function ProductCatalog() {
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadingCourses, setLoadingCourses] = useState(true);
   const [courseError, setCourseError] = useState("");
+  const [loadingBundles, setLoadingBundles] = useState(true);
+  const [bundleError, setBundleError] = useState("");
   const [loadingCart, setLoadingCart] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
@@ -357,6 +365,42 @@ function ProductCatalog() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBundles() {
+      try {
+        setLoadingBundles(true);
+        setBundleError("");
+
+        const response = await fetch(`${API}/bundles`);
+        const data = await readResponse(response);
+
+        if (!Array.isArray(data)) {
+          throw new Error("The bundles endpoint did not return a bundle list.");
+        }
+
+        if (!cancelled) {
+          setBundles(data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setBundleError(err.message || "Unable to load supply bundles.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingBundles(false);
+        }
+      }
+    }
+
+    loadBundles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Load courses. The GET /courses endpoint should return each course
   // with a products array containing its assigned products.
   useEffect(() => {
@@ -446,14 +490,19 @@ function ProductCatalog() {
     [courses, selectedCourseId]
   );
 
-  // When a course is selected, browse only its assigned products.
-  // With no course selected, browse the entire store.
+  const selectedBundle = useMemo(
+    () => bundles.find((bundle) => getBundleId(bundle) === selectedBundleId),
+    [bundles, selectedBundleId]
+  );
+
+  // When a course or bundle is selected, browse only its assigned products.
   const filteredProducts = useMemo(() => {
     const searchValue = search.trim().toLowerCase();
 
-    const productsToBrowse = selectedCourse
-      ? Array.isArray(selectedCourse.products)
-        ? selectedCourse.products
+    const selectedGroup = selectedCourse ?? selectedBundle;
+    const productsToBrowse = selectedGroup
+      ? Array.isArray(selectedGroup.products)
+        ? selectedGroup.products
         : []
       : products;
 
@@ -488,7 +537,7 @@ function ProductCatalog() {
 
         return matchesCategory && matchesSearch;
       });
-  }, [products, selectedCourse, category, search]);
+  }, [products, selectedCourse, selectedBundle, category, search]);
 
   // Combine cart data with catalog data so cart lines have product names,
   // categories, prices, quantities, and totals.
@@ -1191,6 +1240,15 @@ function ProductCatalog() {
                   <p className="text-sm font-bold text-blue-950">
                     {currentUser.username}
                   </p>
+                  {currentUser.role === "student" && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/student-dashboard")}
+                      className="mt-1 text-xs font-bold text-blue-800 underline hover:text-blue-950"
+                    >
+                      Student dashboard
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1785,54 +1843,98 @@ function ProductCatalog() {
           </div>
         )}
 
-        {/* Browse all store products or narrow the catalog to a course. */}
+        {/* Browse all products or narrow the catalog to a course or bundle. */}
         <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <h2 className="text-lg font-black text-blue-950">
-                Find supplies by course
+                Find course supplies
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Choose a course to see the products assigned to it.
+                Choose a course or named supply bundle to see its catalog items.
               </p>
             </div>
 
-            <div className="w-full md:max-w-md">
+            <div className="grid w-full gap-3 md:max-w-2xl md:grid-cols-2">
               <label
                 htmlFor="courseSelect"
-                className="mb-2 block text-sm font-bold text-slate-700"
+                className="block text-sm font-bold text-slate-700"
               >
                 Course
-              </label>
-              <select
-                id="courseSelect"
-                value={selectedCourseId}
-                onChange={(event) => {
-                  setSelectedCourseId(event.target.value);
-                  setCategory("All");
-                }}
-                disabled={loadingCourses || courses.length === 0}
-                className="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <option value="">
-                  {loadingCourses
-                    ? "Loading courses..."
-                    : courses.length === 0
-                    ? "No courses available"
-                    : "All store products"}
-                </option>
-                {courses.map((course) => (
-                  <option key={getCourseId(course)} value={getCourseId(course)}>
-                    {getCourseLabel(course)}
+                <select
+                  id="courseSelect"
+                  value={selectedCourseId}
+                  onChange={(event) => {
+                    setSelectedCourseId(event.target.value);
+                    setSelectedBundleId("");
+                    setCategory("All");
+                  }}
+                  disabled={loadingCourses || courses.length === 0}
+                  className="mt-2 w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <option value="">
+                    {loadingCourses
+                      ? "Loading courses..."
+                      : courses.length === 0
+                      ? "No courses available"
+                      : "All store products"}
                   </option>
-                ))}
-              </select>
+                  {courses.map((course) => (
+                    <option
+                      key={getCourseId(course)}
+                      value={getCourseId(course)}
+                    >
+                      {getCourseLabel(course)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label
+                htmlFor="bundleSelect"
+                className="block text-sm font-bold text-slate-700"
+              >
+                Supply bundle
+                <select
+                  id="bundleSelect"
+                  value={selectedBundleId}
+                  onChange={(event) => {
+                    setSelectedBundleId(event.target.value);
+                    setSelectedCourseId("");
+                    setCategory("All");
+                  }}
+                  disabled={loadingBundles || bundles.length === 0}
+                  className="mt-2 w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <option value="">
+                    {loadingBundles
+                      ? "Loading bundles..."
+                      : bundles.length === 0
+                      ? "No bundles available"
+                      : "All store products"}
+                  </option>
+                  {bundles.map((bundle) => (
+                    <option
+                      key={getBundleId(bundle)}
+                      value={getBundleId(bundle)}
+                    >
+                      {bundle.bundle_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
 
           {courseError && (
             <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               {courseError}
+            </p>
+          )}
+
+          {bundleError && (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {bundleError}
             </p>
           )}
 
@@ -1867,6 +1969,19 @@ function ProductCatalog() {
               </button>
             </div>
           )}
+
+          {selectedBundle && (
+            <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3">
+              <p className="font-bold text-blue-950">
+                {selectedBundle.bundle_name}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-blue-700">
+                {selectedBundle.products.length}{" "}
+                {selectedBundle.products.length === 1 ? "item" : "items"} in
+                this bundle. Add items individually at their catalog prices.
+              </p>
+            </div>
+          )}
         </section>
 
         <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1891,11 +2006,17 @@ function ProductCatalog() {
         <div id="staff-product-list" className="mb-5 flex items-center justify-between scroll-mt-6">
           <div>
             <h2 className="text-xl font-black text-slate-900">
-              {selectedCourse ? "Products for this Course" : "Available Items"}
+              {selectedCourse
+                ? "Products for this Course"
+                : selectedBundle
+                ? `Items in ${selectedBundle.bundle_name}`
+                : "Available Items"}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
               {selectedCourse
                 ? "These are the products assigned to the selected course."
+                : selectedBundle
+                ? "Select bundle items individually to add them to your cart."
                 : "Select a product to add it to your cart."}
             </p>
           </div>
@@ -1913,6 +2034,8 @@ function ProductCatalog() {
             <p className="mt-2 text-sm text-slate-500">
               {selectedCourse
                 ? "This course has no assigned products matching your search or category. Try clearing your search, choosing another category, or selecting a different course."
+                : selectedBundle
+                ? "This bundle has no catalog items matching your search or category. Try clearing your search or choosing a different bundle."
                 : "Try another search or category."}
             </p>
           </div>

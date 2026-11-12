@@ -30,6 +30,20 @@ CREATE TABLE IF NOT EXISTS course_products (
     FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS supply_bundles (
+    bundle_id INT AUTO_INCREMENT PRIMARY KEY,
+    bundle_name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS supply_bundle_products (
+    bundle_id INT NOT NULL,
+    product_id INT NOT NULL,
+    PRIMARY KEY (bundle_id, product_id),
+    FOREIGN KEY (bundle_id) REFERENCES supply_bundles(bundle_id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS product_price_history (
     history_id INT AUTO_INCREMENT PRIMARY KEY,
     product_id INT NOT NULL,
@@ -42,11 +56,15 @@ CREATE TABLE IF NOT EXISTS product_price_history (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-    user_id INT PRIMARY KEY,
+    user_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
-    student_id VARCHAR(20)
+    student_id VARCHAR(20) UNIQUE,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    email VARCHAR(254),
+    phone VARCHAR(30)
 );
 
 CREATE TABLE IF NOT EXISTS staff_activity_log (
