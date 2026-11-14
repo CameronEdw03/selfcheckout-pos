@@ -531,6 +531,7 @@ function ProductCatalog() {
           category === "All" || product.category === category;
 
         const matchesSearch =
+          String(product.product_id ?? "").toLowerCase().includes(searchValue) ||
           String(product.name ?? "").toLowerCase().includes(searchValue) ||
           String(product.description ?? "").toLowerCase().includes(searchValue) ||
           String(product.category ?? "").toLowerCase().includes(searchValue);
@@ -1225,7 +1226,8 @@ function ProductCatalog() {
               <div className="w-full sm:w-80">
                 <input
                   type="text"
-                  placeholder="Search the library store"
+                  aria-label="Search by item code or name"
+                  placeholder="Search by item code or name"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   className="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-700 focus:bg-white"
@@ -1235,7 +1237,7 @@ function ProductCatalog() {
               {currentUser && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    {currentUser.role === "employee" ? "Employee" : "Customer"}
+                    {currentUser.role === "employee" ? "Employee" : "Student"}
                   </p>
                   <p className="text-sm font-bold text-blue-950">
                     {currentUser.username}
@@ -1246,7 +1248,8 @@ function ProductCatalog() {
                       onClick={() => navigate("/student-dashboard")}
                       className="mt-1 text-xs font-bold text-blue-800 underline hover:text-blue-950"
                     >
-                      Student dashboard
+                      {/* Student dashboard */}
+                      Profile
                     </button>
                   )}
                 </div>
@@ -2027,17 +2030,36 @@ function ProductCatalog() {
         </div>
 
         {filteredProducts.length === 0 ? (
-          <div className="rounded-xl border border-slate-200 bg-white px-6 py-20 text-center shadow-sm">
+          <div
+            role={search.trim() ? "status" : undefined}
+            className="rounded-xl border border-slate-200 bg-white px-6 py-20 text-center shadow-sm"
+          >
             <h3 className="text-lg font-bold text-slate-900">
-              No items found
+              {search.trim()
+                ? `No item found for “${search.trim()}”`
+                : "No items found"}
             </h3>
             <p className="mt-2 text-sm text-slate-500">
-              {selectedCourse
+              {search.trim()
+                ? "Check the item code or try a name. Your cart is unchanged, and you can keep shopping."
+                : selectedCourse
                 ? "This course has no assigned products matching your search or category. Try clearing your search, choosing another category, or selecting a different course."
                 : selectedBundle
                 ? "This bundle has no catalog items matching your search or category. Try clearing your search or choosing a different bundle."
                 : "Try another search or category."}
             </p>
+            {search.trim() && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setCategory("All");
+                }}
+                className="mt-4 rounded-lg bg-blue-900 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-800"
+              >
+                Clear search and keep shopping
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

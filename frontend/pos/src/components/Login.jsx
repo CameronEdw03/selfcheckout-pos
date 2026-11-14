@@ -59,7 +59,7 @@ function Login() {
                     ? "/manager-dashboard"
                     : user.role === "employee"
                         ? "/staff-dashboard"
-                    : "/student-dashboard"
+                    : "/ProductCatalog"
             );
 
         } catch {
