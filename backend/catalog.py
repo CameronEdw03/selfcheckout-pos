@@ -1,0 +1,722 @@
+
+from decimal import Decimal, ROUND_HALF_UP
+
+from connection import create_connection
+
+
+def add_product(product_id, name, description, price, quantity, category):
+    """Add a new product to the catalog."""
+    connection = create_connection()
+
+    if not connection:
+        return False
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+
+        query = """
+            INSERT INTO products
+            (product_id, name, description, price, quantity, category)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """
+
+        values = (
+            product_id,
+            name,
+            description,
+            price,
+            quantity,
+            category
+        )
+
+        cursor.execute(query, values)
+        connection.commit()
+
+        return True
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error adding product: {error}")
+        return False
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def edit_product(product_id, name, description, price, quantity, category):
+    """Edit an existing product in the catalog."""
+    connection = create_connection()
+
+    if not connection:
+        return False
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+
+        query = """
+            UPDATE products
+            SET name = %s,
+                description = %s,
+                price = %s,
+                quantity = %s,
+                category = %s,
+                discount_percent = CASE WHEN %s >= 5 THEN 0 ELSE discount_percent END
+            WHERE product_id = %s
+        """
+
+        values = (
+            name,
+            description,
+            price,
+            quantity,
+            category,
+            quantity,
+            product_id
+        )
+
+        cursor.execute(query, values)
+
+        if cursor.rowcount == 0:
+            connection.rollback()
+            return False
+
+        connection.commit()
+        return True
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error editing product: {error}")
+        return False
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def apply_low_stock_discount(
+    product_id,
+    reason,
+    changed_by,
+    discount_percent=5,
+):
+    """Apply the fixed discount only when a product is below the stock threshold."""
+    connection = create_connection()
+
+    if not connection:
+        return "unavailable"
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT name, price, quantity, discount_percent
+            FROM products
+            WHERE product_id = %s
+            FOR UPDATE
+            """,
+            (product_id,)
+        )
+
+        product = cursor.fetchone()
+
+        if not product:
+            connection.rollback()
+            return "not_found"
+
+        product_name, price, quantity, current_discount = product
+
+        if quantity >= 5:
+            connection.rollback()
+            return "stock_not_eligible"
+
+        if Decimal(str(current_discount or 0)) > 0:
+            connection.rollback()
+            return "already_discounted"
+
+        old_price = (
+            Decimal(str(price))
+            * (
+                Decimal("1")
+                - Decimal(str(current_discount or 0)) / Decimal("100")
+            )
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        new_price = (
+            old_price
+            * (Decimal("1") - Decimal(str(discount_percent)) / Decimal("100"))
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        cursor.execute(
+            """
+            INSERT INTO product_price_history
+                (product_id, product_name, previous_price, new_price, reason, changed_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (product_id, product_name, old_price, new_price, reason, changed_by)
+        )
+        cursor.execute(
+            """
+            UPDATE products
+            SET discount_percent = %s
+            WHERE product_id = %s
+            """,
+            (discount_percent, product_id)
+        )
+        connection.commit()
+        return "applied"
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error applying product discount: {error}")
+        return "unavailable"
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def update_product_discount_price(product_id, new_price, reason, changed_by):
+    """Set a lower product price and record the change atomically."""
+    connection = create_connection()
+
+    if not connection:
+        return "unavailable", None
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT name, price, discount_percent
+            FROM products
+            WHERE product_id = %s
+            FOR UPDATE
+            """,
+            (product_id,)
+        )
+        product = cursor.fetchone()
+
+        if not product:
+            connection.rollback()
+            return "not_found", None
+
+        product_name, current_price, discount_percent = product
+        old_price = (
+            Decimal(str(current_price))
+            * (Decimal("1") - Decimal(str(discount_percent or 0)) / Decimal("100"))
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        if new_price >= old_price:
+            connection.rollback()
+            return "price_not_lower", None
+
+        cursor.execute(
+            """
+            INSERT INTO product_price_history
+                (product_id, product_name, previous_price, new_price, reason, changed_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (product_id, product_name, old_price, new_price, reason, changed_by)
+        )
+        cursor.execute(
+            """
+            UPDATE products
+            SET price = %s, discount_percent = 0
+            WHERE product_id = %s
+            """,
+            (new_price, product_id)
+        )
+
+        connection.commit()
+        return "updated", {
+            "old_price": old_price,
+            "new_price": new_price,
+        }
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error updating product discount price: {error}")
+        return "unavailable", None
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_product_price_history(limit=100):
+    """Return the most recent product price changes."""
+    connection = create_connection()
+
+    if not connection:
+        return None
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT product_id, product_name, previous_price AS old_price,
+                   new_price, reason,
+                   changed_by, changed_at
+            FROM product_price_history
+            ORDER BY changed_at DESC, history_id DESC
+            LIMIT %s
+            """,
+            (limit,)
+        )
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving product price history: {error}")
+        return None
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def remove_product(product_id):
+    """Remove a product from the catalog."""
+    connection = create_connection()
+
+    if not connection:
+        return False
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            "DELETE FROM products WHERE product_id = %s",
+            (product_id,)
+        )
+
+        if cursor.rowcount == 0:
+            connection.rollback()
+            return False
+
+        connection.commit()
+        return True
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error removing product: {error}")
+        return False
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_all_products():
+    """Retrieve all products from the catalog."""
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM products")
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving products: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def deduct_inventory(product_id, quantity):
+    """Deduct purchased units without allowing negative inventory."""
+    if quantity <= 0:
+        return False
+
+    connection = create_connection()
+
+    if not connection:
+        return False
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+
+        query = """
+            UPDATE products
+            SET quantity = quantity - %s
+            WHERE product_id = %s
+              AND quantity >= %s
+        """
+
+        cursor.execute(query, (quantity, product_id, quantity))
+
+        if cursor.rowcount == 0:
+            connection.rollback()
+            return False
+
+        connection.commit()
+        return True
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error deducting inventory: {error}")
+        return False
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+# Look up an item based on the course number.
+def get_all_courses_with_products():
+    """Retrieve all courses and their associated products."""
+    connection = create_connection()
+
+    if not connection:
+        return None
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                c.course_id,
+                c.course_number,
+                c.course_name,
+                c.description AS course_description,
+                p.product_id,
+                p.name AS product_name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                cp.required
+            FROM courses c
+            LEFT JOIN course_products cp
+                ON c.course_id = cp.course_id
+            LEFT JOIN products p
+                ON cp.product_id = p.product_id
+            ORDER BY c.course_number, p.name
+        """
+
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        courses = {}
+
+        for row in rows:
+            course_id = row["course_id"]
+
+            if course_id not in courses:
+                courses[course_id] = {
+                    "course_id": course_id,
+                    "course_number": row["course_number"],
+                    "course_name": row["course_name"],
+                    "description": row["course_description"],
+                    "products": []
+                }
+
+            if row["product_id"] is not None:
+                courses[course_id]["products"].append({
+                    "product_id": row["product_id"],
+                    "name": row["product_name"],
+                    "description": row["description"],
+                    "price": float(row["price"]),
+                    "quantity": row["quantity"],
+                    "category": row["category"],
+                    "is_tax_exempt": row["is_tax_exempt"],
+                    "required": bool(row["required"])
+                })
+
+        return list(courses.values())
+
+    except Exception as error:
+        print(f"Error retrieving courses and products: {error}")
+        return None
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_all_products_with_color():
+    """Retrieve all products with their assigned colors."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                c.color_id,
+                c.color_name,
+                c.hex_code
+            FROM products p
+            INNER JOIN product_colors pc
+                ON p.product_id = pc.product_id
+            INNER JOIN colors c
+                ON pc.color_id = c.color_id
+            ORDER BY p.product_id, c.color_name;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving products with colors: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_all_colors():
+    """Retrieve all available colors."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                color_id,
+                color_name,
+                hex_code
+            FROM colors
+            ORDER BY color_name;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving colors: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_product_by_id_with_color(product_id):
+    """Retrieve a product by ID with its assigned color(s)."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                c.color_id,
+                c.color_name,
+                c.hex_code
+            FROM products p
+            INNER JOIN product_colors pc
+                ON p.product_id = pc.product_id
+            INNER JOIN colors c
+                ON pc.color_id = c.color_id
+            WHERE p.product_id = %s
+            ORDER BY c.color_name;
+        """
+
+        cursor.execute(query, (product_id,))
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving product by ID with color: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_all_products_with_size():
+    """Retrieve all products with their assigned sizes."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                s.size_id,
+                s.size_name,
+                s.sort_order
+            FROM products p
+            INNER JOIN product_sizes ps
+                ON p.product_id = ps.product_id
+            INNER JOIN sizes s
+                ON ps.size_id = s.size_id
+            ORDER BY p.product_id, s.sort_order;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving products with sizes: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_all_sizes():
+    """Retrieve all available sizes."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                size_id,
+                size_name,
+                sort_order
+            FROM sizes
+            ORDER BY sort_order;
+        """
+
+        cursor.execute(query)
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving sizes: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def get_product_by_id_with_size(product_id):
+    """Retrieve a product by ID with its assigned size(s)."""
+
+    connection = create_connection()
+
+    if not connection:
+        return []
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT
+                p.product_id,
+                p.name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category,
+                p.is_tax_exempt,
+                s.size_id,
+                s.size_name,
+                s.sort_order
+            FROM products p
+            INNER JOIN product_sizes ps
+                ON p.product_id = ps.product_id
+            INNER JOIN sizes s
+                ON ps.size_id = s.size_id
+            WHERE p.product_id = %s
+            ORDER BY s.sort_order;
+        """
+
+        cursor.execute(query, (product_id,))
+        return cursor.fetchall()
+
+    except Exception as error:
+        print(f"Error retrieving product by ID with size: {error}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
