@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS orders (
     order_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
     total DECIMAL(10,2) NOT NULL,
+    payment_method VARCHAR(20) NULL,
+    student_id VARCHAR(20) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -144,4 +146,29 @@ CREATE TABLE IF NOT EXISTS order_items (
     quantity INT NOT NULL,
     price_each DECIMAL(10,2) NOT NULL,
     FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+CREATE TABLE IF NOT EXISTS order_returns (
+    return_id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    user_id INT NOT NULL,
+    refund_total DECIMAL(10,2) NOT NULL,
+    refund_method VARCHAR(20) NOT NULL,
+    reason VARCHAR(500) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_order_returns_order (order_id),
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+CREATE TABLE IF NOT EXISTS order_return_items (
+    return_item_id INT AUTO_INCREMENT PRIMARY KEY,
+    return_id INT NOT NULL,
+    order_item_id INT NOT NULL,
+    product_id INT NOT NULL,
+    quantity INT NOT NULL,
+    refund_each DECIMAL(10,2) NOT NULL,
+    INDEX idx_order_return_items_order_item (order_item_id),
+    FOREIGN KEY (return_id) REFERENCES order_returns(return_id) ON DELETE CASCADE,
+    FOREIGN KEY (order_item_id) REFERENCES order_items(order_item_id),
+    CHECK (quantity >= 1)
 );

@@ -50,6 +50,7 @@ from catalog import (
 )
 from payment import pay_with_cash, pay_with_card, pay_with_voucher, refund_voucher
 from receipt import create_order
+from returns import ReturnError, get_order_for_return, process_return
 from staff_activity import log_staff_activity, get_staff_activity
 
 
@@ -215,6 +216,23 @@ class CardPaymentRequest(BaseModel):
 
 class VoucherPaymentRequest(BaseModel):
     student_id: str = Field(..., min_length=1, max_length=20)
+
+class ReturnLookupRequest(BaseModel):
+    username: str
+    password: str
+
+
+class ReturnItemRequest(BaseModel):
+    order_item_id: int
+    quantity: int = Field(..., ge=1)
+
+
+class ReturnRequest(BaseModel):
+    username: str
+    password: str
+    items: list[ReturnItemRequest] = Field(..., min_length=1, max_length=100)
+    reason: str | None = Field(default=None, max_length=500)
+
 
 class CourseProductAssignmentRequest(BaseModel):
     user_name: str
@@ -392,6 +410,8 @@ def save_checkout_order(
     user_id: int,
     total: Decimal,
     order_items: list[dict],
+    payment_method: str,
+    student_id: str | None = None,
 ):
     """
     Save the completed checkout as an order.
@@ -406,7 +426,13 @@ def save_checkout_order(
         )
 
     try:
-        receipt_id = create_order(user_id, total, order_items)
+        receipt_id = create_order(
+            user_id,
+            total,
+            order_items,
+            payment_method=payment_method,
+            student_id=(student_id or "").strip() or None,
+        )
     except Exception as error:
         print(f"Error creating checkout order: {error}")
         raise HTTPException(
@@ -771,6 +797,8 @@ def cash_checkout(user_id: int, request: CashPaymentRequest):
         user_id,
         total,
         checkout["order_items"],
+        "cash",
+        request.student_id,
     )
 
     return {
@@ -814,6 +842,8 @@ def card_checkout(user_id: int, request: CardPaymentRequest):
         user_id,
         total,
         checkout["order_items"],
+        "card",
+        request.student_id,
     )
 
     return {
@@ -867,6 +897,8 @@ def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
             user_id,
             total,
             checkout["order_items"],
+            "voucher",
+            student_id,
         )
     except HTTPException:
         if not refund_voucher(student_id, total):
@@ -888,6 +920,54 @@ def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
         "voucher_balance": str(payment_result["remaining_balance"]),
         "receipt_id": receipt_id,
     }
+
+
+# -------------------------
+# Return routes
+# -------------------------
+
+def _verify_returning_customer(username: str, password: str):
+    customer = get_user(username)
+
+    if not customer or customer["password"] != password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    return customer
+
+
+@app.post("/returns/{order_id}/lookup")
+def lookup_return_transaction(order_id: int, request: ReturnLookupRequest):
+    customer = _verify_returning_customer(request.username, request.password)
+
+    try:
+        return get_order_for_return(order_id, customer["user_id"])
+    except ReturnError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message)
+
+
+@app.post("/returns/{order_id}")
+def return_transaction_items(order_id: int, request: ReturnRequest):
+    customer = _verify_returning_customer(request.username, request.password)
+    reason = (request.reason or "").strip() or None
+
+    try:
+        return process_return(
+            order_id,
+            customer["user_id"],
+            [item.model_dump() for item in request.items],
+            reason,
+        )
+    except ReturnError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message)
+    except Exception as error:
+        print(f"Error processing return for order {order_id}: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="The return could not be completed. Nothing was refunded.",
+        )
 
 
 # -------------------------
