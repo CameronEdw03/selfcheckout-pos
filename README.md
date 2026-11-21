@@ -147,6 +147,18 @@ Students can create their own student-role account from the sign-in screen. Stud
 
 For existing databases, apply `backend/database/migrations/011_enable_student_registration.sql` followed by `backend/database/migrations/012_add_student_profile_fields.sql` before enabling registration or profile updates. Migration 011 enables generated user IDs and unique Student IDs; migration 012 adds profile fields and assigns IDs to existing students that do not have one.
 
+### Returns by Transaction Number
+
+Students and customers can return items from the **Return an item** link in the catalog header. They enter the transaction number printed on their receipt and confirm their password. Then they choose which items and how many to return. Rules:
+
+* Only the account that made the purchase can return its items.
+* Returns are allowed for 30 days after purchase (`RETURN_WINDOW_DAYS` in `backend/returns.py`).
+* Partial returns are supported; an item can't be returned more times than it was bought.
+* The refund is the price actually paid, including student and deal discounts. Voucher purchases are refunded to the student's voucher; cash and card purchases are refunded to the original payment method.
+* Returned items are added back to inventory.
+
+API: `POST /returns/{order_id}/lookup` and `POST /returns/{order_id}`. Apply `backend/database/migrations/014_add_order_returns.sql` to existing databases. Orders placed before this migration have no saved payment method and are refunded as "Original payment".
+
 ### Backend API
 
 The FastAPI backend provides endpoints for communicating between the frontend and database.

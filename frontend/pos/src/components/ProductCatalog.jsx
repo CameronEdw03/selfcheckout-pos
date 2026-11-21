@@ -1176,7 +1176,7 @@ function ProductCatalog() {
 
     const receiptText = [
       "Dallas College Self-Checkout Receipt",
-      receipt.receiptId ? `Receipt: ${receipt.receiptId}` : "",
+      receipt.receiptId ? `Transaction #: ${receipt.receiptId}` : "",
       `Date: ${receipt.date}`,
       ...receipt.items.map(
         (item) =>
@@ -1290,6 +1290,15 @@ function ProductCatalog() {
                       className="mt-1 text-xs font-bold text-blue-800 underline hover:text-blue-950"
                     >
                       Student dashboard
+                    </button>
+                  )}
+                  {currentUser.role !== "employee" && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/returns")}
+                      className="mt-1 block text-xs font-bold text-blue-800 underline hover:text-blue-950"
+                    >
+                      Return an item
                     </button>
                   )}
                 </div>
@@ -2714,9 +2723,14 @@ function ProductCatalog() {
                 </p>
                 <p className="mt-1 text-xs text-slate-500">{receipt.date}</p>
                 {receipt.receiptId && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Receipt #: {receipt.receiptId}
-                  </p>
+                  <>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Transaction #: {receipt.receiptId}
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Keep this number to return items within 30 days.
+                    </p>
+                  </>
                 )}
               </div>
 
