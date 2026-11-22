@@ -1,4 +1,5 @@
 import CashDrawerWarning from "./CashDrawerWarning";
+import CashDrawerSettings from "./CashDrawerSettings";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CourseProductAssignment from "../components/CourseProductAssignment";
@@ -481,7 +482,7 @@ function ManagerDashboard() {
             You are signed in with manager access.
           </p>
         </section>
-
+        <CashDrawerSettings currentUser={currentUser} />
         {/* Daily sales analytics */}
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-1">
