@@ -30,6 +30,38 @@ CREATE TABLE IF NOT EXISTS course_products (
     FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS supply_bundles (
+    bundle_id INT AUTO_INCREMENT PRIMARY KEY,
+    bundle_name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS supply_bundle_products (
+    bundle_id INT NOT NULL,
+    product_id INT NOT NULL,
+    PRIMARY KEY (bundle_id, product_id),
+    FOREIGN KEY (bundle_id) REFERENCES supply_bundles(bundle_id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS multi_item_deals (
+    deal_id INT AUTO_INCREMENT PRIMARY KEY,
+    product_id INT NOT NULL,
+    deal_type VARCHAR(20) NOT NULL,
+    quantity INT NOT NULL,
+    free_quantity INT NULL,
+    bundle_price DECIMAL(10,2) NULL,
+    starts_on DATE NULL,
+    ends_on DATE NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_multi_item_deals_product (product_id),
+    FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
+    CHECK (deal_type IN ('bundle_price', 'buy_get_free')),
+    CHECK (quantity >= 1)
+);
+
 CREATE TABLE IF NOT EXISTS product_price_history (
     history_id INT AUTO_INCREMENT PRIMARY KEY,
     product_id INT NOT NULL,
@@ -42,11 +74,36 @@ CREATE TABLE IF NOT EXISTS product_price_history (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-    user_id INT PRIMARY KEY,
+    user_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     role VARCHAR(20) NOT NULL DEFAULT 'student',
-    student_id VARCHAR(20)
+    student_id VARCHAR(20) UNIQUE,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    email VARCHAR(254),
+    phone VARCHAR(30)
+);
+
+CREATE TABLE IF NOT EXISTS staff_activity_log (
+    activity_id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_username VARCHAR(50) NOT NULL,
+    action VARCHAR(40) NOT NULL,
+    student_id VARCHAR(20) NULL,
+    product_id INT NULL,
+    product_name VARCHAR(100) NULL,
+    quantity INT NULL,
+    amount DECIMAL(10,2) NULL,
+    details VARCHAR(500) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_staff_activity_created_at (created_at),
+    INDEX idx_staff_activity_staff (staff_username)
+);
+
+CREATE TABLE IF NOT EXISTS student_vouchers (
+    student_id VARCHAR(20) PRIMARY KEY,
+    balance DECIMAL(10,2) NOT NULL DEFAULT 0,
+    CHECK (balance >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS cart_items (
@@ -77,6 +134,8 @@ CREATE TABLE IF NOT EXISTS orders (
     order_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
     total DECIMAL(10,2) NOT NULL,
+    payment_method VARCHAR(20) NULL,
+    student_id VARCHAR(20) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -87,4 +146,29 @@ CREATE TABLE IF NOT EXISTS order_items (
     quantity INT NOT NULL,
     price_each DECIMAL(10,2) NOT NULL,
     FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+CREATE TABLE IF NOT EXISTS order_returns (
+    return_id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    user_id INT NOT NULL,
+    refund_total DECIMAL(10,2) NOT NULL,
+    refund_method VARCHAR(20) NOT NULL,
+    reason VARCHAR(500) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_order_returns_order (order_id),
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+CREATE TABLE IF NOT EXISTS order_return_items (
+    return_item_id INT AUTO_INCREMENT PRIMARY KEY,
+    return_id INT NOT NULL,
+    order_item_id INT NOT NULL,
+    product_id INT NOT NULL,
+    quantity INT NOT NULL,
+    refund_each DECIMAL(10,2) NOT NULL,
+    INDEX idx_order_return_items_order_item (order_item_id),
+    FOREIGN KEY (return_id) REFERENCES order_returns(return_id) ON DELETE CASCADE,
+    FOREIGN KEY (order_item_id) REFERENCES order_items(order_item_id),
+    CHECK (quantity >= 1)
 );

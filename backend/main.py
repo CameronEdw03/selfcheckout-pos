@@ -1,10 +1,18 @@
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from fastapi.middleware.cors import CORSMiddleware
 from connection import create_connection
+from pricing import (
+    DEAL_TYPES,
+    create_deal,
+    get_active_deals,
+    list_deals,
+    set_deal_active,
+    split_line_into_order_rows,
+)
 
 
 from cart import (
@@ -15,6 +23,7 @@ from cart import (
     get_cart_total,
     update_cart_quantity,
     add_course_bundle_to_cart,
+    set_cart_item_discount,
 )
 
 from user import (
@@ -39,13 +48,22 @@ from catalog import (
     get_all_sizes,
     get_product_by_id_with_size,
 )
-from payment import pay_with_cash, pay_with_card
+from payment import (
+    pay_with_cash,
+    pay_with_card,
+    pay_with_voucher,
+    refund_voucher,
+)
+
 from voucher_payment import (
     process_voucher_split_payment,
-    verify_voucher_approver
+    verify_voucher_approver,
 )
+
 from cash_drawer import check_cash_drawer, update_minimum_balance
 from receipt import create_order
+from returns import ReturnError, get_order_for_return, process_return
+from staff_activity import log_staff_activity, get_staff_activity
 
 
 app = FastAPI()
@@ -145,9 +163,53 @@ class DailyAnalyticsRequest(BaseModel):
     report_date: date
 
 
+class BestSellersRequest(BaseModel):
+    user_name: str
+    password: str
+    start_date: date
+    end_date: date
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class CategoryWeeklySalesRequest(BaseModel):
+    user_name: str
+    password: str
+    start_date: date
+    end_date: date
+    category: str = Field(default="Exam Supplies", min_length=1, max_length=50)
+
+
+class ManagerAuthRequest(BaseModel):
+    user_name: str
+    password: str
+
+
+class CreateDealRequest(ManagerAuthRequest):
+    product_id: int = Field(gt=0)
+    deal_type: str
+    quantity: int = Field(ge=1, le=100)
+    free_quantity: int | None = Field(default=None, ge=1, le=100)
+    bundle_price: Decimal | None = Field(
+        default=None, gt=0, max_digits=10, decimal_places=2
+    )
+    starts_on: date | None = None
+    ends_on: date | None = None
+
+
+class SetDealActiveRequest(ManagerAuthRequest):
+    is_active: bool
+
+
 class StaffTransactionRequest(BaseModel):
     user_name: str
     password: str
+
+
+class StaffActivityRequest(BaseModel):
+    user_name: str
+    password: str
+    start_date: date
+    end_date: date
 
 
 class StaffTransactionDiscountRequest(StaffTransactionRequest):
@@ -158,6 +220,25 @@ class StaffTransactionDiscountRequest(StaffTransactionRequest):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class StudentRegistrationRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=8, max_length=255)
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=30)
+
+
+class StudentProfileUpdateRequest(BaseModel):
+    current_username: str
+    current_password: str
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=30)
+    new_password: str | None = Field(default=None, min_length=8, max_length=255)
 
 
 class UpdateQuantityRequest(BaseModel):
@@ -173,14 +254,35 @@ class CardPaymentRequest(BaseModel):
     approved: bool
     student_id: str | None = None
 
-class VoucherPaymentRequest(BaseModel):
+class VoucherSplitPaymentRequest(BaseModel):
     voucher_amount: str
     payment_method: str
     cash_received: str = "0"
     card_approved: bool = False
     student_id: str | None = None
     manager_username: str
-    manager_password: str    
+    manager_password: str
+
+
+class VoucherPaymentRequest(BaseModel):
+    student_id: str = Field(..., min_length=1, max_length=20)
+
+
+class ReturnLookupRequest(BaseModel):
+    username: str
+    password: str
+
+
+class ReturnItemRequest(BaseModel):
+    order_item_id: int
+    quantity: int = Field(..., ge=1)
+
+
+class ReturnRequest(BaseModel):
+    username: str
+    password: str
+    items: list[ReturnItemRequest] = Field(..., min_length=1, max_length=100)
+    reason: str | None = Field(default=None, max_length=500)
 
 class CourseProductAssignmentRequest(BaseModel):
     user_name: str
@@ -233,6 +335,11 @@ class CourseCreateRequest(BaseModel):
     description: str = Field(default="", max_length=255)
 
 
+class SupplyBundleCreateRequest(BaseModel):
+    user_name: str
+    password: str
+    bundle_name: str = Field(..., min_length=1, max_length=100)
+    product_ids: list[int] = Field(..., min_length=1, max_length=100)
 
 # -------------------------
 # Checkout / receipt helpers
@@ -308,15 +415,42 @@ def calculate_checkout_totals(user_id: int, student_id: str | None = None):
             rounding=ROUND_HALF_UP,
         )
 
+        category = str(item.get("category", "")).strip().lower()
+        student_books_discount = bool(valid_student) and category == "books"
+
+        if item.get("deal_id"):
+            # A multi-item deal is applied: price the whole line, not per unit.
+            item_subtotal = Decimal(str(item["line_total"])).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+            line_final = item_subtotal
+
+            if student_books_discount:
+                line_final = (item_subtotal * Decimal("0.90")).quantize(
+                    Decimal("0.01"),
+                    rounding=ROUND_HALF_UP,
+                )
+
+            subtotal += item_subtotal
+            final_total += line_final
+            # Split into rows whose cents add up exactly to the line total.
+            order_items.extend(
+                split_line_into_order_rows(
+                    int(item["product_id"]),
+                    quantity,
+                    line_final,
+                )
+            )
+            continue
+
         item_subtotal = unit_price * quantity
         subtotal += item_subtotal
 
         final_unit_price = unit_price
 
         # Apply the student discount only to Books.
-        category = str(item.get("category", "")).strip().lower()
-
-        if valid_student and category == "books":
+        if student_books_discount:
             final_unit_price = (
                 unit_price * Decimal("0.90")
             ).quantize(
@@ -362,6 +496,8 @@ def save_checkout_order(
     user_id: int,
     total: Decimal,
     order_items: list[dict],
+    payment_method: str = "cash",
+    student_id: str | None = None,
     voucher_payment: dict | None = None,
 ):
     """
@@ -378,11 +514,13 @@ def save_checkout_order(
 
     try:
         receipt_id = create_order(
-    user_id,
-    total,
-    order_items,
-    voucher_payment=voucher_payment
-)
+            user_id,
+            total,
+            order_items,
+            payment_method=payment_method,
+            student_id=(student_id or "").strip() or None,
+            voucher_payment=voucher_payment,
+        )
     except Exception as error:
         print(f"Error creating checkout order: {error}")
         raise HTTPException(
@@ -428,7 +566,217 @@ def login(request: LoginRequest):
         "username": user["username"],
         "role": user["role"],
         "student_id": user["student_id"],
+        "first_name": user.get("first_name"),
+        "last_name": user.get("last_name"),
+        "email": user.get("email"),
+        "phone": user.get("phone"),
     }
+
+
+@app.post("/auth/register", status_code=201)
+def register_student(request: StudentRegistrationRequest):
+    """Create a student account without allowing self-assigned staff roles."""
+    username = request.username.strip()
+    first_name = request.first_name.strip()
+    last_name = request.last_name.strip()
+    email = str(request.email).strip() if request.email else None
+    phone = request.phone.strip() if request.phone else None
+
+    if not username or not first_name or not last_name:
+        raise HTTPException(
+            status_code=422,
+            detail="Username, first name, and last name cannot be blank",
+        )
+
+    connection = create_connection()
+
+    if connection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO users
+                (username, password, role, first_name, last_name, email, phone)
+            VALUES (%s, %s, 'student', %s, %s, %s, %s)
+            """,
+            (
+                username,
+                request.password,
+                first_name,
+                last_name,
+                email or None,
+                phone or None,
+            ),
+        )
+        user_id = cursor.lastrowid
+        student_id = f"S{user_id}"
+        cursor.execute(
+            "UPDATE users SET student_id = %s WHERE user_id = %s",
+            (student_id, user_id),
+        )
+        connection.commit()
+
+        return {
+            "message": "Student account created successfully",
+            "user_id": user_id,
+            "username": username,
+            "role": "student",
+            "student_id": student_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email or None,
+            "phone": phone or None,
+        }
+
+    except Exception as error:
+        connection.rollback()
+        error_code = getattr(error, "errno", None)
+
+        if error_code == 1062:
+            database_message = str(getattr(error, "msg", error)).lower()
+            if "username" in database_message:
+                detail = "That username is already registered. Choose another username."
+            else:
+                detail = (
+                    "That username or generated Student ID is already in use. "
+                    "Contact a manager if this continues."
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=detail,
+            ) from error
+
+        if error_code in {1054, 1364}:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "The database is missing fields required for student registration. "
+                    "Apply migrations 011_enable_student_registration.sql and "
+                    "012_add_student_profile_fields.sql, then restart the backend."
+                ),
+            ) from error
+
+        if error_code == 1146:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "The users table is missing. Initialize the database with "
+                    "backend/database/schema.sql, then apply migrations 011 and 012."
+                ),
+            ) from error
+
+        print(f"Error registering student: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the student account.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
+
+
+@app.put("/students/profile")
+def update_student_profile(request: StudentProfileUpdateRequest):
+    """Update student profile details without allowing student ID changes."""
+    current_user = get_user(request.current_username)
+
+    if not current_user or current_user.get("password") != request.current_password:
+        raise HTTPException(
+            status_code=401,
+            detail="Current username or password is incorrect.",
+        )
+
+    if current_user.get("role") != "student":
+        raise HTTPException(
+            status_code=403,
+            detail="Only student accounts can update a student profile.",
+        )
+
+    first_name = request.first_name.strip()
+    last_name = request.last_name.strip()
+    email = str(request.email).strip() if request.email else None
+    phone = request.phone.strip() if request.phone else None
+
+    if not first_name or not last_name:
+        raise HTTPException(
+            status_code=422,
+            detail="First name and last name cannot be blank",
+        )
+
+    connection = create_connection()
+
+    if connection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            UPDATE users
+            SET first_name = %s,
+                last_name = %s,
+                email = %s,
+                phone = %s,
+                password = COALESCE(%s, password)
+            WHERE user_id = %s
+              AND role = 'student'
+            """,
+            (
+                first_name,
+                last_name,
+                email or None,
+                phone or None,
+                request.new_password or None,
+                current_user["user_id"],
+            ),
+        )
+        connection.commit()
+
+        return {
+            "message": "Profile updated successfully",
+            "user_id": current_user["user_id"],
+            "username": current_user["username"],
+            "role": "student",
+            "student_id": current_user["student_id"],
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email or None,
+            "phone": phone or None,
+        }
+
+    except Exception as error:
+        connection.rollback()
+
+        if getattr(error, "errno", None) == 1062:
+            raise HTTPException(
+                status_code=409,
+                detail="Unable to update the profile because a value is already in use.",
+            ) from error
+
+        print(f"Error updating student profile: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update the student profile.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
 
 
 @app.get("/user")
@@ -537,6 +885,8 @@ def cash_checkout(user_id: int, request: CashPaymentRequest):
         user_id,
         total,
         checkout["order_items"],
+        "cash",
+        request.student_id,
     )
 
     return {
@@ -580,6 +930,8 @@ def card_checkout(user_id: int, request: CardPaymentRequest):
         user_id,
         total,
         checkout["order_items"],
+        "card",
+        request.student_id,
     )
 
     return {
@@ -591,8 +943,8 @@ def card_checkout(user_id: int, request: CardPaymentRequest):
         "receipt_id": receipt_id,
     }
 
-@app.post("/checkout/{user_id}/voucher")
-def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
+@app.post("/checkout/{user_id}/voucher-split")
+def voucher_split_checkout(user_id: int, request: VoucherSplitPaymentRequest):
     # Calculate the final checkout total.
     checkout = calculate_checkout_totals(
         user_id,
@@ -644,12 +996,13 @@ def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
 
     # Save order and voucher record in one transaction.
     receipt_id = save_checkout_order(
-        user_id,
-        total,
-        checkout["order_items"],
-        voucher_payment=voucher_payment
-    )
-
+    user_id,
+    total,
+    checkout["order_items"],
+    payment_method="voucher",
+    student_id=request.student_id,
+    voucher_payment=voucher_payment,
+)
     return {
         "message": "Voucher checkout successful.",
         "subtotal": str(checkout["subtotal"]),
@@ -663,6 +1016,120 @@ def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
         "approved_by_staff_id": approval["approved_by_staff_id"],
         "receipt_id": receipt_id
     }
+
+@app.post("/checkout/{user_id}/voucher")
+def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
+    student_id = request.student_id.strip()
+
+    # Validates the student ID and applies the student discount.
+    checkout = calculate_checkout_totals(
+        user_id,
+        student_id,
+    )
+
+    # A voucher can only pay for the cart of the student who owns it.
+    student = get_student(student_id)
+
+    if int(student["user_id"]) != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="This student ID does not match the signed-in account.",
+        )
+
+    total = checkout["total"]
+
+    if total <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cart total must be greater than zero.",
+        )
+
+    payment_result = pay_with_voucher(student_id, total)
+
+    if not payment_result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=payment_result["message"],
+        )
+
+    # Put the money back on the voucher if the order can't be saved.
+    try:
+        receipt_id = save_checkout_order(
+            user_id,
+            total,
+            checkout["order_items"],
+            "voucher",
+            student_id,
+        )
+    except HTTPException:
+        if not refund_voucher(student_id, total):
+            print(
+                f"Voucher refund failed for {student_id} "
+                f"after order save failure: {total}"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="The order could not be saved. Your voucher was not charged.",
+        )
+
+    return {
+        "message": payment_result["message"],
+        "subtotal": str(checkout["subtotal"]),
+        "student_discount": str(checkout["student_discount"]),
+        "student_discount_applied": checkout["student_discount_applied"],
+        "total": str(total),
+        "voucher_balance": str(payment_result["remaining_balance"]),
+        "receipt_id": receipt_id,
+    }
+
+
+# -------------------------
+# Return routes
+# -------------------------
+
+def _verify_returning_customer(username: str, password: str):
+    customer = get_user(username)
+
+    if not customer or customer["password"] != password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    return customer
+
+
+@app.post("/returns/{order_id}/lookup")
+def lookup_return_transaction(order_id: int, request: ReturnLookupRequest):
+    customer = _verify_returning_customer(request.username, request.password)
+
+    try:
+        return get_order_for_return(order_id, customer["user_id"])
+    except ReturnError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message)
+
+
+@app.post("/returns/{order_id}")
+def return_transaction_items(order_id: int, request: ReturnRequest):
+    customer = _verify_returning_customer(request.username, request.password)
+    reason = (request.reason or "").strip() or None
+
+    try:
+        return process_return(
+            order_id,
+            customer["user_id"],
+            [item.model_dump() for item in request.items],
+            reason,
+        )
+    except ReturnError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message)
+    except Exception as error:
+        print(f"Error processing return for order {order_id}: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="The return could not be completed. Nothing was refunded.",
+        )
+
 
 # -------------------------
 # Manager product routes
@@ -720,14 +1187,30 @@ def cancel_staff_student_transaction(
     student_id: str,
     request: StaffTransactionRequest,
 ):
-    _verify_employee(request.user_name, request.password)
+    staff_member = _verify_employee(request.user_name, request.password)
     student = _get_student_transaction(student_id)
+
+    # Capture the cart before it is cleared so the manager can see what
+    # was in the canceled transaction.
+    items = get_cart(student["user_id"])
+    cart_total = get_cart_total(student["user_id"])
 
     if not clear_cart(student["user_id"]):
         raise HTTPException(
             status_code=500,
             detail="Unable to cancel the student transaction.",
         )
+
+    log_staff_activity(
+        staff_member["username"],
+        "transaction_canceled",
+        student_id=student["student_id"],
+        quantity=sum(int(item["quantity"]) for item in items),
+        amount=cart_total,
+        details=", ".join(
+            f"{item['name']} x{item['quantity']}" for item in items
+        )[:500] or None,
+    )
 
     return {"message": "Student transaction canceled successfully"}
 
@@ -738,8 +1221,17 @@ def remove_staff_student_transaction_item(
     product_id: int,
     request: StaffTransactionRequest,
 ):
-    _verify_employee(request.user_name, request.password)
+    staff_member = _verify_employee(request.user_name, request.password)
     student = _get_student_transaction(student_id)
+
+    removed_item = next(
+        (
+            item
+            for item in get_cart(student["user_id"])
+            if int(item["product_id"]) == product_id
+        ),
+        None,
+    )
 
     if not remove_from_cart(student["user_id"], product_id):
         raise HTTPException(
@@ -747,17 +1239,26 @@ def remove_staff_student_transaction_item(
             detail="Product was not found in the student transaction.",
         )
 
+    log_staff_activity(
+        staff_member["username"],
+        "item_removed",
+        student_id=student["student_id"],
+        product_id=product_id,
+        product_name=removed_item["name"] if removed_item else None,
+        quantity=int(removed_item["quantity"]) if removed_item else None,
+        amount=removed_item["line_total"] if removed_item else None,
+    )
+
     return {"message": "Product removed from the student transaction"}
 
 
-@app.post("/staff/transactions/{student_id}/items/{product_id}/discount")
-def discount_staff_student_transaction_item(
-    student_id: str,
+def _apply_staff_cart_discount(
+    user_id: int,
     product_id: int,
     request: StaffTransactionDiscountRequest,
 ):
+    """Verify the employee, then lower one cart item's price (audited)."""
     staff_member = _verify_employee(request.user_name, request.password)
-    student = _get_student_transaction(student_id)
     reason = request.reason.strip()
 
     if not reason:
@@ -768,7 +1269,7 @@ def discount_staff_student_transaction_item(
 
     try:
         result, prices = set_cart_item_discount(
-            student["user_id"],
+            user_id,
             product_id,
             request.new_price,
             reason,
@@ -797,6 +1298,570 @@ def discount_staff_student_transaction_item(
         "message": "Transaction discount applied successfully",
         "previous_price": str(prices["previous_price"]),
         "new_price": str(prices["new_price"]),
+    }
+
+
+@app.post("/staff/transactions/{student_id}/items/{product_id}/discount")
+def discount_staff_student_transaction_item(
+    student_id: str,
+    product_id: int,
+    request: StaffTransactionDiscountRequest,
+):
+    student = _get_student_transaction(student_id)
+    return _apply_staff_cart_discount(student["user_id"], product_id, request)
+
+
+# Used at the self-checkout screen: an employee walks up to the customer's
+# kiosk and corrects the price of an item that scanned without its sale price.
+@app.post("/cart/{user_id}/items/{product_id}/staff-discount")
+def staff_discount_cart_item(
+    user_id: int,
+    product_id: int,
+    request: StaffTransactionDiscountRequest,
+):
+    return _apply_staff_cart_discount(user_id, product_id, request)
+
+
+@app.post("/manager/staff-activity")
+def get_manager_staff_activity(request: StaffActivityRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view staff activity",
+        )
+
+    if request.end_date < request.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    result = get_staff_activity(request.start_date, request.end_date)
+
+    if result is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load staff activity.",
+        )
+
+    activities = result["activities"]
+    action_counts = {
+        "price_change": 0,
+        "transaction_discount": 0,
+        "item_removed": 0,
+        "transaction_canceled": 0,
+    }
+    staff_totals = {
+        username: {
+            "staff_username": username,
+            "total_actions": 0,
+            "discount_amount": 0.0,
+            "removed_amount": 0.0,
+            **action_counts,
+        }
+        for username in result["staff_members"]
+    }
+    total_discount = Decimal("0.00")
+    total_removed = Decimal("0.00")
+
+    for activity in activities:
+        action = activity["action"]
+        staff = staff_totals.setdefault(
+            activity["staff_username"],
+            {
+                "staff_username": activity["staff_username"],
+                "total_actions": 0,
+                "discount_amount": 0.0,
+                "removed_amount": 0.0,
+                **action_counts,
+            },
+        )
+
+        staff["total_actions"] += 1
+        staff[action] = staff.get(action, 0) + 1
+        action_counts[action] = action_counts.get(action, 0) + 1
+
+        if activity["discount_amount"] is not None:
+            total_discount += Decimal(str(activity["discount_amount"]))
+            staff["discount_amount"] += activity["discount_amount"]
+
+        if activity["amount"] is not None:
+            total_removed += Decimal(str(activity["amount"]))
+            staff["removed_amount"] += activity["amount"]
+
+    staff_breakdown = sorted(
+        staff_totals.values(),
+        key=lambda staff: (
+            -staff["total_actions"],
+            staff["staff_username"].lower(),
+        ),
+    )
+
+    for staff in staff_breakdown:
+        staff["discount_amount"] = round(staff["discount_amount"], 2)
+        staff["removed_amount"] = round(staff["removed_amount"], 2)
+
+    return {
+        "start_date": request.start_date.isoformat(),
+        "end_date": request.end_date.isoformat(),
+        "summary": {
+            "total_actions": len(activities),
+            "active_staff": sum(
+                1 for staff in staff_breakdown if staff["total_actions"] > 0
+            ),
+            "total_discount": float(total_discount),
+            "total_removed": float(total_removed),
+            "action_counts": action_counts,
+        },
+        "staff_breakdown": staff_breakdown,
+        "activities": activities,
+    }
+
+
+def _week_start(day: date) -> date:
+    """Monday of the week containing ``day``."""
+    return day - timedelta(days=day.weekday())
+
+
+@app.post("/manager/category-weekly-sales")
+def get_manager_category_weekly_sales(request: CategoryWeeklySalesRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view sales analytics",
+        )
+
+    if request.end_date < request.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    category = request.category.strip()
+    first_week = _week_start(request.start_date)
+    last_week = _week_start(request.end_date)
+    # Always report whole weeks (Monday through Sunday).
+    range_start = first_week
+    range_end = last_week + timedelta(days=7)
+
+    if (range_end - range_start).days > 7 * 104:
+        raise HTTPException(
+            status_code=422,
+            detail="Please choose a range of two years or less.",
+        )
+
+    connection = create_connection()
+
+    if not connection:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                product_id,
+                name,
+                price,
+                quantity AS in_stock
+            FROM products
+            WHERE LOWER(TRIM(category)) = LOWER(%s)
+            ORDER BY name
+            """,
+            (category,),
+        )
+        category_products = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT
+                DATE_SUB(DATE(o.created_at), INTERVAL WEEKDAY(o.created_at) DAY)
+                    AS week_start,
+                oi.product_id,
+                SUM(oi.quantity) AS quantity_sold,
+                SUM(oi.quantity * oi.price_each) AS revenue,
+                COUNT(DISTINCT o.order_id) AS order_count
+            FROM orders AS o
+            JOIN order_items AS oi ON oi.order_id = o.order_id
+            JOIN products AS p ON p.product_id = oi.product_id
+            WHERE o.created_at >= %s AND o.created_at < %s
+              AND LOWER(TRIM(p.category)) = LOWER(%s)
+            GROUP BY week_start, oi.product_id
+            """,
+            (range_start, range_end, category),
+        )
+        rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT
+                DATE_SUB(DATE(o.created_at), INTERVAL WEEKDAY(o.created_at) DAY)
+                    AS week_start,
+                COUNT(DISTINCT o.order_id) AS order_count
+            FROM orders AS o
+            JOIN order_items AS oi ON oi.order_id = o.order_id
+            JOIN products AS p ON p.product_id = oi.product_id
+            WHERE o.created_at >= %s AND o.created_at < %s
+              AND LOWER(TRIM(p.category)) = LOWER(%s)
+            GROUP BY week_start
+            """,
+            (range_start, range_end, category),
+        )
+        orders_by_week = {
+            row["week_start"]: int(row["order_count"] or 0)
+            for row in cursor.fetchall()
+        }
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load weekly category sales.",
+        ) from error
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+    # Build every week in the range, so weeks with no sales show as zero.
+    weeks = {}
+    week = first_week
+    while week <= last_week:
+        weeks[week] = {
+            "week_start": week.isoformat(),
+            "week_end": (week + timedelta(days=6)).isoformat(),
+            "quantity_sold": 0,
+            "revenue": Decimal("0.00"),
+            "order_count": orders_by_week.get(week, 0),
+            "products": {},
+        }
+        week += timedelta(days=7)
+
+    product_totals = {
+        product["product_id"]: {
+            "product_id": product["product_id"],
+            "product_name": product["name"],
+            "price": float(product["price"]),
+            "in_stock": int(product["in_stock"] or 0),
+            "quantity_sold": 0,
+            "revenue": Decimal("0.00"),
+        }
+        for product in category_products
+    }
+
+    for row in rows:
+        week_start = row["week_start"]
+        if week_start not in weeks:
+            continue
+
+        quantity = int(row["quantity_sold"] or 0)
+        revenue = Decimal(str(row["revenue"] or 0))
+        product_id = row["product_id"]
+
+        bucket = weeks[week_start]
+        bucket["quantity_sold"] += quantity
+        bucket["revenue"] += revenue
+        bucket["products"][str(product_id)] = quantity
+
+        if product_id in product_totals:
+            product_totals[product_id]["quantity_sold"] += quantity
+            product_totals[product_id]["revenue"] += revenue
+
+    week_list = []
+    for bucket in weeks.values():
+        bucket["revenue"] = float(bucket["revenue"])
+        week_list.append(bucket)
+
+    product_list = sorted(
+        product_totals.values(),
+        key=lambda product: (
+            -product["quantity_sold"],
+            product["product_name"].lower(),
+        ),
+    )
+    for product in product_list:
+        product["revenue"] = float(product["revenue"])
+
+    week_count = len(week_list) or 1
+    total_units = sum(bucket["quantity_sold"] for bucket in week_list)
+
+    return {
+        "category": category,
+        "start_date": range_start.isoformat(),
+        "end_date": (range_end - timedelta(days=1)).isoformat(),
+        "summary": {
+            "week_count": len(week_list),
+            "units_sold": total_units,
+            "total_revenue": sum(bucket["revenue"] for bucket in week_list),
+            "average_units_per_week": round(total_units / week_count, 1),
+        },
+        "weeks": week_list,
+        "products": product_list,
+    }
+
+
+# -------------------------
+# Multi-item pricing (deals)
+# -------------------------
+
+def _verify_manager(user_name: str, password: str):
+    manager = get_user(user_name)
+
+    if not manager or manager["password"] != password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can manage multi-item pricing",
+        )
+
+    return manager
+
+
+# Public: deals running today, so the catalog can show "3 for $5" badges.
+@app.get("/deals/active")
+def get_todays_deals():
+    deals = get_active_deals()
+    return [deal for product_deals in deals.values() for deal in product_deals]
+
+
+@app.post("/manager/deals/list")
+def get_manager_deals(request: ManagerAuthRequest):
+    _verify_manager(request.user_name, request.password)
+    deals = list_deals()
+
+    if deals is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load multi-item deals.",
+        )
+
+    return deals
+
+
+@app.post("/manager/deals", status_code=201)
+def create_manager_deal(request: CreateDealRequest):
+    manager = _verify_manager(request.user_name, request.password)
+
+    if request.deal_type not in DEAL_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="Deal type must be bundle_price or buy_get_free.",
+        )
+
+    if request.deal_type == "bundle_price":
+        if request.quantity < 2:
+            raise HTTPException(
+                status_code=422,
+                detail="A bundle price deal needs a quantity of at least 2.",
+            )
+        if request.bundle_price is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Enter the bundle price (for example 3 for $5.00).",
+            )
+
+    if request.deal_type == "buy_get_free" and request.free_quantity is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Enter how many items are free.",
+        )
+
+    if (
+        request.starts_on
+        and request.ends_on
+        and request.ends_on < request.starts_on
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    try:
+        status, deal_id = create_deal(
+            request.product_id,
+            request.deal_type,
+            request.quantity,
+            request.free_quantity,
+            request.bundle_price,
+            request.starts_on,
+            request.ends_on,
+            manager["username"],
+        )
+    except Exception as error:
+        print(f"Error creating multi-item deal: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the deal.",
+        ) from error
+
+    if status == "product_not_found":
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    if status == "no_savings":
+        raise HTTPException(
+            status_code=409,
+            detail="The bundle price must be lower than buying the items separately.",
+        )
+
+    return {"message": "Deal created successfully", "deal_id": deal_id}
+
+
+@app.post("/manager/deals/{deal_id}/active")
+def set_manager_deal_active(deal_id: int, request: SetDealActiveRequest):
+    _verify_manager(request.user_name, request.password)
+
+    try:
+        found = set_deal_active(deal_id, request.is_active)
+    except Exception as error:
+        print(f"Error updating multi-item deal: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update the deal.",
+        ) from error
+
+    if not found:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    return {
+        "message": "Deal resumed" if request.is_active else "Deal paused",
+    }
+
+
+@app.post("/manager/best-sellers")
+def get_manager_best_sellers(request: BestSellersRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can view sales analytics",
+        )
+
+    if request.end_date < request.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="The end date must be on or after the start date.",
+        )
+
+    connection = create_connection()
+
+    if not connection:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    # Half-open range [start, end + 1 day) so the whole end date is included
+    # and an index on orders.created_at can still be used.
+    range_start = request.start_date
+    range_end = request.end_date + timedelta(days=1)
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                oi.product_id,
+                COALESCE(p.name, CONCAT('Product #', oi.product_id)) AS product_name,
+                COALESCE(NULLIF(TRIM(p.category), ''), 'Uncategorized') AS category,
+                SUM(oi.quantity) AS quantity_sold,
+                SUM(oi.quantity * oi.price_each) AS revenue,
+                COUNT(DISTINCT o.order_id) AS order_count
+            FROM orders AS o
+            JOIN order_items AS oi ON oi.order_id = o.order_id
+            LEFT JOIN products AS p ON p.product_id = oi.product_id
+            WHERE o.created_at >= %s AND o.created_at < %s
+            GROUP BY oi.product_id, product_name, category
+            ORDER BY quantity_sold DESC, revenue DESC, product_name ASC
+            """,
+            (range_start, range_end),
+        )
+        rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS transaction_count
+            FROM orders
+            WHERE created_at >= %s AND created_at < %s
+            """,
+            (range_start, range_end),
+        )
+        transaction_count = int(cursor.fetchone()["transaction_count"] or 0)
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load best-selling products.",
+        ) from error
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+    units_sold = sum(int(row["quantity_sold"] or 0) for row in rows)
+    total_revenue = sum(
+        (Decimal(str(row["revenue"] or 0)) for row in rows),
+        Decimal("0.00"),
+    )
+
+    best_sellers = []
+    for rank, row in enumerate(rows[: request.limit], start=1):
+        quantity = int(row["quantity_sold"] or 0)
+        best_sellers.append(
+            {
+                "rank": rank,
+                "product_id": row["product_id"],
+                "product_name": row["product_name"],
+                "category": row["category"],
+                "quantity_sold": quantity,
+                "revenue": float(Decimal(str(row["revenue"] or 0))),
+                "order_count": int(row["order_count"] or 0),
+                "share_of_units": (
+                    round(quantity / units_sold * 100, 1) if units_sold else 0
+                ),
+            }
+        )
+
+    return {
+        "start_date": request.start_date.isoformat(),
+        "end_date": request.end_date.isoformat(),
+        "summary": {
+            "transaction_count": transaction_count,
+            "units_sold": units_sold,
+            "total_revenue": float(total_revenue),
+            "distinct_products": len(rows),
+        },
+        "best_sellers": best_sellers,
     }
 
 
@@ -1311,10 +2376,88 @@ def get_courses_with_products_endpoint():
     if courses is None:
         raise HTTPException(
             status_code=500,
-            detail="Error retrieving courses",
+            detail=(
+                "Unable to retrieve courses. Check the backend database "
+                "connection and apply migration "
+                "007_add_course_product_assignments.sql."
+            ),
         )
 
     return courses
+
+
+@app.get("/bundles")
+def get_supply_bundles():
+    """Return each supply bundle and its catalog products."""
+    connection = create_connection()
+
+    if connection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to connect to the database.",
+        )
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT
+                b.bundle_id,
+                b.bundle_name,
+                p.product_id,
+                p.name AS product_name,
+                p.description,
+                p.price,
+                p.quantity,
+                p.category
+            FROM supply_bundles AS b
+            LEFT JOIN supply_bundle_products AS bp
+                ON bp.bundle_id = b.bundle_id
+            LEFT JOIN products AS p
+                ON p.product_id = bp.product_id
+            ORDER BY b.bundle_name, p.name
+            """
+        )
+
+        bundles_by_id = {}
+        for row in cursor.fetchall():
+            bundle_id = row["bundle_id"]
+            bundle = bundles_by_id.setdefault(
+                bundle_id,
+                {
+                    "bundle_id": bundle_id,
+                    "bundle_name": row["bundle_name"],
+                    "products": [],
+                },
+            )
+
+            if row["product_id"] is not None:
+                bundle["products"].append(
+                    {
+                        "product_id": row["product_id"],
+                        "name": row["product_name"],
+                        "description": row["description"],
+                        "price": float(row["price"]),
+                        "quantity": row["quantity"],
+                        "category": row["category"],
+                    }
+                )
+
+        return list(bundles_by_id.values())
+
+    except Exception as error:
+        print(f"Error retrieving supply bundles: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load supply bundles.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        connection.close()
 
 
 def _verify_course_assignment_manager(user_name: str, password: str):
@@ -1330,10 +2473,115 @@ def _verify_course_assignment_manager(user_name: str, password: str):
     if manager.get("role") != "manager":
         raise HTTPException(
             status_code=403,
-            detail="Only managers can manage courses and course products",
+            detail=(
+                "Only managers can manage courses, supply bundles, "
+                "and course products"
+            ),
         )
 
     return manager
+
+
+@app.post("/bundles", status_code=201)
+def create_supply_bundle(request: SupplyBundleCreateRequest):
+    """Create a named bundle from existing catalog products."""
+    _verify_course_assignment_manager(request.user_name, request.password)
+
+    bundle_name = request.bundle_name.strip()
+    product_ids = list(dict.fromkeys(request.product_ids))
+
+    if not bundle_name:
+        raise HTTPException(
+            status_code=422,
+            detail="Bundle name cannot be blank",
+        )
+
+    if any(product_id <= 0 for product_id in product_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="Product IDs must be positive integers",
+        )
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = create_connection()
+
+        if connection is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection failed",
+            )
+
+        cursor = connection.cursor(dictionary=True)
+        placeholders = ", ".join(["%s"] * len(product_ids))
+        cursor.execute(
+            f"SELECT product_id FROM products WHERE product_id IN ({placeholders})",
+            tuple(product_ids),
+        )
+        found_product_ids = {row["product_id"] for row in cursor.fetchall()}
+        missing_product_ids = set(product_ids) - found_product_ids
+
+        if missing_product_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Unknown product IDs: "
+                    + ", ".join(map(str, sorted(missing_product_ids)))
+                ),
+            )
+
+        cursor.execute(
+            "INSERT INTO supply_bundles (bundle_name) VALUES (%s)",
+            (bundle_name,),
+        )
+        bundle_id = cursor.lastrowid
+        cursor.executemany(
+            """
+            INSERT INTO supply_bundle_products (bundle_id, product_id)
+            VALUES (%s, %s)
+            """,
+            [(bundle_id, product_id) for product_id in product_ids],
+        )
+        connection.commit()
+
+        return {
+            "bundle_id": bundle_id,
+            "bundle_name": bundle_name,
+            "products": [
+                {"product_id": product_id}
+                for product_id in product_ids
+            ],
+            "message": "Supply bundle created successfully",
+        }
+
+    except HTTPException:
+        if connection is not None:
+            connection.rollback()
+        raise
+
+    except Exception as error:
+        if connection is not None:
+            connection.rollback()
+
+        if getattr(error, "errno", None) == 1062:
+            raise HTTPException(
+                status_code=409,
+                detail="A supply bundle with that name already exists",
+            ) from error
+
+        print(f"Error creating supply bundle: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create supply bundle.",
+        ) from error
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None:
+            connection.close()
 
 
 @app.post("/courses", status_code=201)

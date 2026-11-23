@@ -1,6 +1,7 @@
 import CashDrawerWarning from "./CashDrawerWarning";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import StaffPriceCorrection from "./StaffPriceCorrection";
 
 const API = "http://127.0.0.1:8000";
 
@@ -124,6 +125,12 @@ function formatMoney(value) {
   return Number(value || 0).toFixed(2);
 }
 
+const PAYMENT_LABELS = {
+  cash: "Cash",
+  card: "Card",
+  voucher: "Student Voucher",
+};
+
 function getCourseLabel(course) {
   const code =
     course?.course_code ??
@@ -140,7 +147,7 @@ function getCourseLabel(course) {
     "";
 
   if (code && name && String(name) !== String(code)) {
-    return `${code} — ${name}`;
+    return `${code} â€” ${name}`;
   }
 
   return String(
@@ -150,6 +157,10 @@ function getCourseLabel(course) {
 
 function getCourseId(course) {
   return String(course?.course_id ?? course?.id ?? "");
+}
+
+function getBundleId(bundle) {
+  return String(bundle?.bundle_id ?? bundle?.id ?? "");
 }
 
 async function readResponse(response) {
@@ -187,10 +198,14 @@ function ProductCatalog() {
   const [pendingSizeId, setPendingSizeId] = useState("");
   const [courses, setCourses] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [bundles, setBundles] = useState([]);
+  const [selectedBundleId, setSelectedBundleId] = useState("");
   const [cartItems, setCartItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
 
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isPriceCorrectionOpen, setIsPriceCorrectionOpen] = useState(false);
+  const [activeDeals, setActiveDeals] = useState({});
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [priceDiscountProduct, setPriceDiscountProduct] = useState(null);
@@ -221,6 +236,8 @@ function ProductCatalog() {
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadingCourses, setLoadingCourses] = useState(true);
   const [courseError, setCourseError] = useState("");
+  const [loadingBundles, setLoadingBundles] = useState(true);
+  const [bundleError, setBundleError] = useState("");
   const [loadingCart, setLoadingCart] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
@@ -356,6 +373,72 @@ function ProductCatalog() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBundles() {
+      try {
+        setLoadingBundles(true);
+        setBundleError("");
+
+        const response = await fetch(`${API}/bundles`);
+        const data = await readResponse(response);
+
+        if (!Array.isArray(data)) {
+          throw new Error("The bundles endpoint did not return a bundle list.");
+        }
+
+        if (!cancelled) {
+          setBundles(data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setBundleError(err.message || "Unable to load supply bundles.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingBundles(false);
+        }
+      }
+    }
+
+    loadBundles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load today's multi-item deals ("3 for $5") so product cards can show them.
+  // The cart and checkout apply deals on the backend; this is display only.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDeals() {
+      try {
+        const response = await fetch(`${API}/deals/active`);
+        const data = await readResponse(response);
+
+        if (!cancelled && Array.isArray(data)) {
+          const byProduct = {};
+          for (const deal of data) {
+            const productId = Number(deal.product_id);
+            byProduct[productId] = [...(byProduct[productId] ?? []), deal];
+          }
+          setActiveDeals(byProduct);
+        }
+      } catch {
+        // Deals are optional on the catalog; regular prices still work.
+      }
+    }
+
+    loadDeals();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Load courses. The GET /courses endpoint should return each course
   // with a products array containing its assigned products.
   useEffect(() => {
@@ -445,14 +528,19 @@ function ProductCatalog() {
     [courses, selectedCourseId]
   );
 
-  // When a course is selected, browse only its assigned products.
-  // With no course selected, browse the entire store.
+  const selectedBundle = useMemo(
+    () => bundles.find((bundle) => getBundleId(bundle) === selectedBundleId),
+    [bundles, selectedBundleId]
+  );
+
+  // When a course or bundle is selected, browse only its assigned products.
   const filteredProducts = useMemo(() => {
     const searchValue = search.trim().toLowerCase();
 
-    const productsToBrowse = selectedCourse
-      ? Array.isArray(selectedCourse.products)
-        ? selectedCourse.products
+    const selectedGroup = selectedCourse ?? selectedBundle;
+    const productsToBrowse = selectedGroup
+      ? Array.isArray(selectedGroup.products)
+        ? selectedGroup.products
         : []
       : products;
 
@@ -487,7 +575,7 @@ function ProductCatalog() {
 
         return matchesCategory && matchesSearch;
       });
-  }, [products, selectedCourse, category, search]);
+  }, [products, selectedCourse, selectedBundle, category, search]);
 
   // Combine cart data with catalog data so cart lines have product names,
   // categories, prices, quantities, and totals.
@@ -534,6 +622,11 @@ function ProductCatalog() {
 
   const cartTotal = cartLines.reduce(
     (total, item) => total + item.lineTotal,
+    0
+  );
+
+  const cartDealSavings = cartLines.reduce(
+    (total, item) => total + Number(item.deal_savings ?? 0),
     0
   );
 
@@ -974,6 +1067,8 @@ function ProductCatalog() {
       quantity: item.quantity,
       unit_price: item.unitPrice,
       line_total: item.lineTotal,
+      deal_label: item.deal_label ?? null,
+      deal_savings: Number(item.deal_savings ?? 0),
     }));
 
     const enteredStudentId = studentId.trim();
@@ -1011,6 +1106,23 @@ function ProductCatalog() {
             }),
           }
         );
+} else if (paymentMethod === "voucher") {
+  if (!enteredStudentId) {
+          throw new Error("Enter your student ID to pay with your voucher.");
+        }
+
+        response = await fetch(
+          `${API}/checkout/${currentUser.user_id}/voucher`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              student_id: enteredStudentId,
+            }),
+          }
+        );
       } else if (paymentMethod === "card") {
         response = await fetch(
           `${API}/checkout/${currentUser.user_id}/card`,
@@ -1026,7 +1138,7 @@ function ProductCatalog() {
           }
         );
 
-} else if (paymentMethod === "voucher") {
+} else if (paymentMethod === "voucher-split") {
   const amount = Number(voucherAmount);
 
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -1047,7 +1159,7 @@ function ProductCatalog() {
   }
 
   response = await fetch(
-    `${API}/checkout/${currentUser.user_id}/voucher`,
+  `${API}/checkout/${currentUser.user_id}/voucher-split`,
     {
       method: "POST",
       headers: {
@@ -1087,22 +1199,23 @@ function ProductCatalog() {
           paymentResponse?.cash_received ??
           (paymentMethod === "cash" ? cashReceived : ""),
         change: paymentResponse?.change ?? null,
-                voucherAmount:
-          paymentMethod === "voucher"
+        voucherAmount:
+          paymentMethod === "voucher-split"
             ? Number(paymentResponse?.voucher_amount ?? 0)
             : null,
-        remainingAmount:
-          paymentMethod === "voucher"
-            ? Number(paymentResponse?.remaining_amount ?? 0)
-            : null,
-        remainingPaymentMethod:
-          paymentMethod === "voucher"
-            ? paymentResponse?.payment_method
-            : null,
-        approvedByStaffId:
-          paymentMethod === "voucher"
-            ? paymentResponse?.approved_by_staff_id
-            : null,
+       remainingAmount:
+  paymentMethod === "voucher-split"
+    ? Number(paymentResponse?.remaining_amount ?? 0)
+    : null,
+       remainingPaymentMethod:
+  paymentMethod === "voucher-split"
+    ? paymentResponse?.payment_method
+    : null,
+approvedByStaffId:
+  paymentMethod === "voucher-split"
+    ? paymentResponse?.approved_by_staff_id
+    : null,
+        voucherBalance: paymentResponse?.voucher_balance ?? null,
         message:
 
           paymentResponse?.message ?? "Checkout completed successfully.",
@@ -1132,38 +1245,43 @@ function ProductCatalog() {
 
     const receiptText = [
       "Dallas College Self-Checkout Receipt",
-      receipt.receiptId ? `Receipt: ${receipt.receiptId}` : "",
+      receipt.receiptId ? `Transaction #: ${receipt.receiptId}` : "",
       `Date: ${receipt.date}`,
       ...receipt.items.map(
         (item) =>
-          `${item.name} x${item.quantity} - $${formatMoney(item.line_total)}`
+          `${item.name} x${item.quantity} - $${formatMoney(item.line_total)}` +
+          (item.deal_label
+            ? ` (${item.deal_label}, saved $${formatMoney(item.deal_savings)})`
+            : "")
       ),
       `Subtotal: $${formatMoney(receipt.subtotal)}`,
       receipt.studentDiscountApplied
         ? `Student discount: -$${formatMoney(receipt.studentDiscount)}`
         : "",
       `Total: $${formatMoney(receipt.total)}`,
-    `Payment: ${
-  receipt.paymentMethod === "voucher"
-    ? "Voucher + Split Payment"
-    : receipt.paymentMethod === "cash"
-    ? "Cash"
-    : "Card"
-}`,
-receipt.paymentMethod === "voucher"
-  ? `Voucher Amount: $${formatMoney(receipt.voucherAmount)}`
-  : "",
-receipt.paymentMethod === "voucher"
-  ? `Remaining Balance: $${formatMoney(receipt.remainingAmount)}`
-  : "",
-receipt.paymentMethod === "voucher"
-  ? `Remaining Payment Method: ${
-      receipt.remainingPaymentMethod === "cash" ? "Cash" : "Card"
-    }`
-  : "",
-receipt.paymentMethod === "voucher"
-  ? `Approved by Staff ID: ${receipt.approvedByStaffId}`
-  : "",
+      `Payment: ${
+        receipt.paymentMethod === "voucher-split" &&
+        receipt.approvedByStaffId != null
+          ? "Voucher + Split Payment"
+          : PAYMENT_LABELS[receipt.paymentMethod] ?? receipt.paymentMethod
+      }`,
+      receipt.voucherAmount != null
+        ? `Voucher Amount: $${formatMoney(receipt.voucherAmount)}`
+        : "",
+      receipt.remainingAmount != null
+        ? `Remaining Amount: $${formatMoney(receipt.remainingAmount)}`
+        : "",
+      receipt.remainingPaymentMethod
+        ? `Remaining Payment Method: ${
+            receipt.remainingPaymentMethod === "cash" ? "Cash" : "Card"
+          }`
+        : "",
+      receipt.approvedByStaffId != null
+        ? `Approved by Staff ID: ${receipt.approvedByStaffId}`
+        : "",
+      receipt.voucherBalance != null
+        ? `Voucher balance remaining: $${formatMoney(receipt.voucherBalance)}`
+        : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -1253,6 +1371,24 @@ receipt.paymentMethod === "voucher"
                   <p className="text-sm font-bold text-blue-950">
                     {currentUser.username}
                   </p>
+                  {currentUser.role === "student" && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/student-dashboard")}
+                      className="mt-1 text-xs font-bold text-blue-800 underline hover:text-blue-950"
+                    >
+                      Student dashboard
+                    </button>
+                  )}
+                  {currentUser.role !== "employee" && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/returns")}
+                      className="mt-1 block text-xs font-bold text-blue-800 underline hover:text-blue-950"
+                    >
+                      Return an item
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1326,8 +1462,36 @@ receipt.paymentMethod === "voucher"
                                     {item.category}
                                   </p>
                                   <p className="mt-1 text-sm font-semibold text-blue-950">
+                                    {item.discount_reason &&
+                                      Number(item.price) > item.unitPrice && (
+                                        <span className="mr-1 font-normal text-slate-400 line-through">
+                                          ${formatMoney(item.price)}
+                                        </span>
+                                      )}
                                     ${formatMoney(item.unitPrice)} each
                                   </p>
+                                  {item.discount_reason && !item.deal_label && (
+                                    <p className="mt-1 inline-block rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-800">
+                                      Sale price applied by staff
+                                    </p>
+                                  )}
+                                  {item.deal_label && (
+                                    <p className="mt-1 inline-block rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-800">
+                                      {item.deal_label} Â· You save $
+                                      {formatMoney(item.deal_savings)}
+                                    </p>
+                                  )}
+                                  {!item.deal_label &&
+                                    (activeDeals[item.product_id] ?? []).map(
+                                      (deal) => (
+                                        <p
+                                          key={deal.deal_id}
+                                          className="mt-1 text-xs font-semibold text-green-700"
+                                        >
+                                          Deal available: {deal.label}
+                                        </p>
+                                      )
+                                    )}
                                 </div>
 
                                 <button
@@ -1359,7 +1523,7 @@ receipt.paymentMethod === "voucher"
                                     className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 font-bold text-slate-700 hover:bg-slate-100"
                                     aria-label={`Decrease quantity of ${item.name}`}
                                   >
-                                    −
+                                    âˆ’
                                   </button>
                                   <span className="min-w-6 text-center text-sm font-bold">
                                     {item.quantity}
@@ -1379,7 +1543,12 @@ receipt.paymentMethod === "voucher"
                                   </button>
                                 </div>
 
-                                <span className="text-sm font-black text-blue-950">
+                                <span className="text-right text-sm font-black text-blue-950">
+                                  {item.deal_label && (
+                                    <span className="block text-xs font-normal text-slate-400 line-through">
+                                      ${formatMoney(item.regular_line_total)}
+                                    </span>
+                                  )}
                                   ${formatMoney(item.lineTotal)}
                                 </span>
                               </div>
@@ -1396,6 +1565,12 @@ receipt.paymentMethod === "voucher"
                               <span className="text-xl font-black text-blue-950">
                                 ${formatMoney(cartTotal)}
                               </span>
+                              {cartDealSavings > 0 && (
+                                <span className="block text-xs font-semibold text-green-700">
+                                  Multi-item savings: $
+                                  {formatMoney(cartDealSavings)}
+                                </span>
+                              )}
                             </div>
                             <button
                               type="button"
@@ -1415,6 +1590,17 @@ receipt.paymentMethod === "voucher"
                           >
                             Proceed to Checkout
                           </button>
+
+                          {currentUser?.role !== "employee" && (
+                            <button
+                              type="button"
+                              onClick={() => setIsPriceCorrectionOpen(true)}
+                              className="mt-3 w-full text-center text-xs font-semibold text-slate-500 underline-offset-2 hover:text-blue-900 hover:underline"
+                            >
+                              Item on sale but scanned wrong? Staff price
+                              correction
+                            </button>
+                          )}
                         </div>
                       </>
                     )}
@@ -1484,7 +1670,7 @@ receipt.paymentMethod === "voucher"
               </div>
               <p className="text-sm font-semibold text-slate-600">
                 Active transaction: {cartCount}{" "}
-                {cartCount === 1 ? "item" : "items"} · $
+                {cartCount === 1 ? "item" : "items"} Â· $
                 {formatMoney(cartTotal)}
               </p>
             </div>
@@ -1594,13 +1780,13 @@ receipt.paymentMethod === "voucher"
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="font-bold text-slate-900">
-                      {staffTransaction.username} · Student ID{" "}
+                      {staffTransaction.username} Â· Student ID{" "}
                       {staffTransaction.student_id}
                     </p>
                     <p className="mt-1 text-sm text-slate-500">
-                      In-progress transaction · {staffTransaction.cart.length}{" "}
+                      In-progress transaction Â· {staffTransaction.cart.length}{" "}
                       {staffTransaction.cart.length === 1 ? "product" : "products"}{" "}
-                      · Total $
+                      Â· Total $
                       {formatMoney(
                         staffTransaction.cart.reduce(
                           (total, item) =>
@@ -1646,7 +1832,7 @@ receipt.paymentMethod === "voucher"
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <p className="font-bold text-slate-900">
-                                {item.name} × {item.quantity}
+                                {item.name} Ã— {item.quantity}
                               </p>
                               <p className="mt-1 text-sm text-slate-600">
                                 Unit price: $
@@ -1850,54 +2036,98 @@ receipt.paymentMethod === "voucher"
           </div>
         )}
 
-        {/* Browse all store products or narrow the catalog to a course. */}
+        {/* Browse all products or narrow the catalog to a course or bundle. */}
         <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <h2 className="text-lg font-black text-blue-950">
-                Find supplies by course
+                Find course supplies
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Choose a course to see the products assigned to it.
+                Choose a course or named supply bundle to see its catalog items.
               </p>
             </div>
 
-            <div className="w-full md:max-w-md">
+            <div className="grid w-full gap-3 md:max-w-2xl md:grid-cols-2">
               <label
                 htmlFor="courseSelect"
-                className="mb-2 block text-sm font-bold text-slate-700"
+                className="block text-sm font-bold text-slate-700"
               >
                 Course
-              </label>
-              <select
-                id="courseSelect"
-                value={selectedCourseId}
-                onChange={(event) => {
-                  setSelectedCourseId(event.target.value);
-                  setCategory("All");
-                }}
-                disabled={loadingCourses || courses.length === 0}
-                className="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <option value="">
-                  {loadingCourses
-                    ? "Loading courses..."
-                    : courses.length === 0
-                    ? "No courses available"
-                    : "All store products"}
-                </option>
-                {courses.map((course) => (
-                  <option key={getCourseId(course)} value={getCourseId(course)}>
-                    {getCourseLabel(course)}
+                <select
+                  id="courseSelect"
+                  value={selectedCourseId}
+                  onChange={(event) => {
+                    setSelectedCourseId(event.target.value);
+                    setSelectedBundleId("");
+                    setCategory("All");
+                  }}
+                  disabled={loadingCourses || courses.length === 0}
+                  className="mt-2 w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <option value="">
+                    {loadingCourses
+                      ? "Loading courses..."
+                      : courses.length === 0
+                      ? "No courses available"
+                      : "All store products"}
                   </option>
-                ))}
-              </select>
+                  {courses.map((course) => (
+                    <option
+                      key={getCourseId(course)}
+                      value={getCourseId(course)}
+                    >
+                      {getCourseLabel(course)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label
+                htmlFor="bundleSelect"
+                className="block text-sm font-bold text-slate-700"
+              >
+                Supply bundle
+                <select
+                  id="bundleSelect"
+                  value={selectedBundleId}
+                  onChange={(event) => {
+                    setSelectedBundleId(event.target.value);
+                    setSelectedCourseId("");
+                    setCategory("All");
+                  }}
+                  disabled={loadingBundles || bundles.length === 0}
+                  className="mt-2 w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <option value="">
+                    {loadingBundles
+                      ? "Loading bundles..."
+                      : bundles.length === 0
+                      ? "No bundles available"
+                      : "All store products"}
+                  </option>
+                  {bundles.map((bundle) => (
+                    <option
+                      key={getBundleId(bundle)}
+                      value={getBundleId(bundle)}
+                    >
+                      {bundle.bundle_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
 
           {courseError && (
             <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               {courseError}
+            </p>
+          )}
+
+          {bundleError && (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {bundleError}
             </p>
           )}
 
@@ -1932,6 +2162,19 @@ receipt.paymentMethod === "voucher"
               </button>
             </div>
           )}
+
+          {selectedBundle && (
+            <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3">
+              <p className="font-bold text-blue-950">
+                {selectedBundle.bundle_name}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-blue-700">
+                {selectedBundle.products.length}{" "}
+                {selectedBundle.products.length === 1 ? "item" : "items"} in
+                this bundle. Add items individually at their catalog prices.
+              </p>
+            </div>
+          )}
         </section>
 
         <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1956,11 +2199,17 @@ receipt.paymentMethod === "voucher"
         <div id="staff-product-list" className="mb-5 flex items-center justify-between scroll-mt-6">
           <div>
             <h2 className="text-xl font-black text-slate-900">
-              {selectedCourse ? "Products for this Course" : "Available Items"}
+              {selectedCourse
+                ? "Products for this Course"
+                : selectedBundle
+                ? `Items in ${selectedBundle.bundle_name}`
+                : "Available Items"}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
               {selectedCourse
                 ? "These are the products assigned to the selected course."
+                : selectedBundle
+                ? "Select bundle items individually to add them to your cart."
                 : "Select a product to add it to your cart."}
             </p>
           </div>
@@ -1978,6 +2227,8 @@ receipt.paymentMethod === "voucher"
             <p className="mt-2 text-sm text-slate-500">
               {selectedCourse
                 ? "This course has no assigned products matching your search or category. Try clearing your search, choosing another category, or selecting a different course."
+                : selectedBundle
+                ? "This bundle has no catalog items matching your search or category. Try clearing your search or choosing a different bundle."
                 : "Try another search or category."}
             </p>
           </div>
@@ -2043,6 +2294,19 @@ receipt.paymentMethod === "voucher"
                     <h3 className="min-h-6 text-lg font-black text-slate-900">
                       {product.name}
                     </h3>
+
+                    {(activeDeals[productId] ?? []).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {activeDeals[productId].map((deal) => (
+                          <span
+                            key={deal.deal_id}
+                            className="rounded-md bg-green-600 px-2 py-0.5 text-xs font-black uppercase tracking-wide text-white"
+                          >
+                            {deal.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
 
                     <p className="mt-2 min-h-10 text-sm leading-5 text-slate-500">
                       {product.description}
@@ -2276,7 +2540,7 @@ receipt.paymentMethod === "voucher"
             <div className="bg-blue-950 px-6 py-5 text-white">
               <h2 className="text-xl font-black">Select a Size</h2>
               <p className="mt-1 text-sm text-blue-200">
-                {sizePickerProduct.name} — $
+                {sizePickerProduct.name} â€” $
                 {formatMoney(getProductPrice(sizePickerProduct))}
               </p>
             </div>
@@ -2336,6 +2600,15 @@ receipt.paymentMethod === "voucher"
         </div>
       )}
 
+      {isPriceCorrectionOpen && currentUser?.user_id && (
+        <StaffPriceCorrection
+          userId={currentUser.user_id}
+          cartLines={cartLines}
+          onApplied={refreshCart}
+          onClose={() => setIsPriceCorrectionOpen(false)}
+        />
+      )}
+
       {isCheckoutOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6">
           <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-2xl">
@@ -2369,12 +2642,27 @@ receipt.paymentMethod === "voucher"
                       className="flex justify-between gap-3 text-sm text-slate-600"
                     >
                       <span>
-                        {item.name} × {item.quantity}
+                        {item.name} Ã— {item.quantity}
+                        {item.deal_label && (
+                          <span className="block text-xs font-semibold text-green-700">
+                            {item.deal_label} (âˆ’${formatMoney(item.deal_savings)})
+                          </span>
+                        )}
                       </span>
                       <span>${formatMoney(item.lineTotal)}</span>
                     </div>
                   ))}
                 </div>
+
+                {currentUser?.role !== "employee" && (
+                  <button
+                    type="button"
+                    onClick={() => setIsPriceCorrectionOpen(true)}
+                    className="mt-3 text-xs font-semibold text-blue-900 underline-offset-2 hover:underline"
+                  >
+                    Sale price didn&apos;t scan? Ask an employee to correct it
+                  </button>
+                )}
               </div>
 
               <div>
@@ -2382,15 +2670,17 @@ receipt.paymentMethod === "voucher"
                   htmlFor="studentId"
                   className="mb-2 block text-sm font-bold text-slate-700"
                 >
-                  Student ID (optional)
+                  Student ID{" "}
+                  {paymentMethod === "voucher" ? "(required)" : "(optional)"}
                 </label>
                 <input
                   id="studentId"
                   type="text"
                   value={studentId}
                   onChange={(event) => setStudentId(event.target.value)}
-                  placeholder="Enter your student ID"
+                  placeholder="Enter your student ID (e.g. S10001)"
                   autoComplete="off"
+                  required={paymentMethod === "voucher"}
                   className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-700"
                 />
               </div>
@@ -2399,7 +2689,13 @@ receipt.paymentMethod === "voucher"
                 <label className="mb-2 block text-sm font-bold text-slate-700">
                   Payment method
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div
+                  className={`grid gap-3 ${
+                    currentUser?.role === "student"
+                      ? "grid-cols-3"
+                      : "grid-cols-2"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => setPaymentMethod("cash")}
@@ -2422,20 +2718,35 @@ receipt.paymentMethod === "voucher"
                   >
                     Card
                   </button>
-                  <button
-  type="button"
-  onClick={() => setPaymentMethod("voucher")}
-  className={`rounded-lg border px-4 py-3 text-sm font-bold ${
-    paymentMethod === "voucher"
-      ? "border-blue-900 bg-blue-50 text-blue-950"
-      : "border-slate-200 text-slate-600"
-  }`}
->
-  Voucher
-</button>
+                  {currentUser?.role === "student" && (
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod("voucher")}
+                      className={`rounded-lg border px-4 py-3 text-sm font-bold ${
+                        paymentMethod === "voucher"
+                          ? "border-blue-900 bg-blue-50 text-blue-950"
+                          : "border-slate-200 text-slate-600"
+                      }`}
+                    >
+                      Voucher
+                    </button>
+                  )}
+{currentUser?.role !== "student" && (
+  <button
+    type="button"
+    onClick={() => setPaymentMethod("voucher-split")}
+    className={`rounded-lg border px-4 py-3 text-sm font-bold ${
+      paymentMethod === "voucher-split"
+        ? "border-blue-900 bg-blue-50 text-blue-950"
+        : "border-slate-200 text-slate-600"
+    }`}
+  >
+    Voucher Split Payment
+  </button>
+)}
                 </div>
               </div>
-{paymentMethod === "voucher" && (
+{paymentMethod === "voucher-split" && (
   <div>
     <label
       htmlFor="voucherAmount"
@@ -2498,7 +2809,7 @@ receipt.paymentMethod === "voucher"
 )}
   </div>
 )}
-{paymentMethod === "voucher" && (
+{paymentMethod === "voucher-split" && (
   <div className="space-y-4">
     <div>
       <label
@@ -2563,7 +2874,14 @@ receipt.paymentMethod === "voucher"
 
               {paymentMethod === "card" && (
                 <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
-                  Card checkout will use the backend’s simulated card approval.
+                  Card checkout will use the backendâ€™s simulated card approval.
+                </p>
+              )}
+
+              {paymentMethod === "voucher" && (
+                <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                  The total will be charged to the student voucher for the ID
+                  entered above. The ID must match your account.
                 </p>
               )}
 
@@ -2612,9 +2930,14 @@ receipt.paymentMethod === "voucher"
                 </p>
                 <p className="mt-1 text-xs text-slate-500">{receipt.date}</p>
                 {receipt.receiptId && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Receipt #: {receipt.receiptId}
-                  </p>
+                  <>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Transaction #: {receipt.receiptId}
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Keep this number to return items within 30 days.
+                    </p>
+                  </>
                 )}
               </div>
 
@@ -2625,7 +2948,13 @@ receipt.paymentMethod === "voucher"
                     className="flex justify-between gap-3 text-sm"
                   >
                     <span className="text-slate-700">
-                      {item.name} × {item.quantity}
+                      {item.name} Ã— {item.quantity}
+                      {item.deal_label && (
+                        <span className="block text-xs font-semibold text-green-700">
+                          {item.deal_label} Â· saved $
+                          {formatMoney(item.deal_savings)}
+                        </span>
+                      )}
                     </span>
                     <span className="font-semibold text-slate-900">
                       ${formatMoney(item.line_total)}
@@ -2643,7 +2972,7 @@ receipt.paymentMethod === "voucher"
                 {receipt.studentDiscountApplied && (
                   <div className="flex justify-between text-sm font-semibold text-green-700">
                     <span>Student discount (10% on Books)</span>
-                    <span>−${formatMoney(receipt.studentDiscount)}</span>
+                    <span>âˆ’${formatMoney(receipt.studentDiscount)}</span>
                   </div>
                 )}
 
@@ -2653,35 +2982,51 @@ receipt.paymentMethod === "voucher"
                 </div>
 
                 <p className="mt-1 text-sm text-slate-500">
-  Payment:{" "}
-  {receipt.paymentMethod === "voucher"
-    ? "Voucher + Split Payment"
-    : receipt.paymentMethod === "cash"
-    ? "Cash"
-    : "Card"}
-</p>
+                  Payment:{" "}
+                  {receipt.paymentMethod === "voucher" &&
+                  receipt.approvedByStaffId != null
+                    ? "Voucher + Split Payment"
+                    : PAYMENT_LABELS[receipt.paymentMethod] ??
+                      receipt.paymentMethod}
+                </p>
 
-{receipt.paymentMethod === "voucher" && (
-  <div className="mt-3 space-y-1 rounded-lg bg-blue-50 p-3 text-sm text-slate-700">
-    <p>
-      Voucher Amount: ${formatMoney(receipt.voucherAmount)}
-    </p>
-    <p>
-      Remaining Balance: ${formatMoney(receipt.remainingAmount)}
-    </p>
-    <p>
-      Remaining Payment Method:{" "}
-      {receipt.remainingPaymentMethod === "cash" ? "Cash" : "Card"}
-    </p>
-    <p>
-      Approved by Staff ID: {receipt.approvedByStaffId}
-    </p>
-  </div>
-)}
+                {receipt.approvedByStaffId != null && (
+                  <div className="mt-3 space-y-1 rounded-lg bg-blue-50 p-3 text-sm text-slate-700">
+                    <p>
+                      Voucher Amount: ${formatMoney(receipt.voucherAmount)}
+                    </p>
+                    <p>
+                      Remaining Amount: ${formatMoney(receipt.remainingAmount)}
+                    </p>
+                    <p>
+                      Remaining Payment Method:{" "}
+                      {receipt.remainingPaymentMethod === "cash"
+                        ? "Cash"
+                        : "Card"}
+                    </p>
+                    <p>
+                      Approved by Staff ID: {receipt.approvedByStaffId}
+                    </p>
+                  </div>
+                )}
+
+                {receipt.voucherBalance != null && (
+                  <p className="mt-2 text-sm text-slate-700">
+                    Voucher balance remaining: $
+                    {formatMoney(receipt.voucherBalance)}
+                  </p>
+                )}
 
                 {receipt.change != null && (
                   <p className="mt-1 text-sm text-slate-500">
                     Change: ${formatMoney(receipt.change)}
+                  </p>
+                )}
+
+                {receipt.voucherBalance != null && (
+                  <p className="mt-1 text-sm text-slate-500">
+                    Voucher balance remaining: $
+                    {formatMoney(receipt.voucherBalance)}
                   </p>
                 )}
               </div>
@@ -2702,8 +3047,8 @@ receipt.paymentMethod === "voucher"
                   className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-700"
                 />
                 <p className="mt-2 text-xs text-slate-500">
-                  This opens your device’s messaging app with the receipt filled
-                  in. You’ll need to send the text yourself.
+                  This opens your deviceâ€™s messaging app with the receipt filled
+                  in. Youâ€™ll need to send the text yourself.
                 </p>
               </div>
 

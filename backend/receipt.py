@@ -4,7 +4,14 @@ from decimal import Decimal, InvalidOperation
 from connection import create_connection
 
 
-def create_order(user_id: int, total, cart_items, voucher_payment=None):
+def create_order(
+    user_id: int,
+    total,
+    cart_items,
+    payment_method=None,
+    student_id=None,
+    voucher_payment=None,
+):
     connection = create_connection()
 
     if not connection:
@@ -20,10 +27,11 @@ def create_order(user_id: int, total, cart_items, voucher_payment=None):
 
         cursor.execute(
             """
-            INSERT INTO orders (user_id, total)
-            VALUES (%s, %s)
+            INSERT INTO orders
+                (user_id, total, payment_method, student_id)
+            VALUES (%s, %s, %s, %s)
             """,
-            (user_id, order_total)
+            (user_id, order_total, payment_method, student_id)
         )
 
         order_id = cursor.lastrowid

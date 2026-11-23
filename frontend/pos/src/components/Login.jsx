@@ -1,13 +1,20 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 function Login() {
     const navigate = useNavigate();
+    const location = useLocation();
 
-    const [username, setUsername] = useState("");
+    const [username, setUsername] = useState(location.state?.username ?? "");
     const [password, setPassword] = useState("");
+    const [firstName, setFirstName] = useState("");
+    const [lastName, setLastName] = useState("");
+    const [email, setEmail] = useState("");
+    const [phone, setPhone] = useState("");
+    const [isRegistering, setIsRegistering] = useState(false);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
+    const [notice, setNotice] = useState(location.state?.notice ?? "");
 
     const handleLogin = async (event) => {
         event.preventDefault();
@@ -39,6 +46,10 @@ function Login() {
                 username: data.username,
                 role: data.role,
                 student_id: data.student_id,
+                first_name: data.first_name,
+                last_name: data.last_name,
+                email: data.email,
+                phone: data.phone,
             };
 
             localStorage.setItem("user", JSON.stringify(user));
@@ -48,7 +59,7 @@ function Login() {
                     ? "/manager-dashboard"
                     : user.role === "employee"
                         ? "/staff-dashboard"
-                    : "/ProductCatalog"
+                    : "/student-dashboard"
             );
 
         } catch {
@@ -57,6 +68,53 @@ function Login() {
             setLoading(false);
         }
     };
+
+    const handleRegister = async (event) => {
+        event.preventDefault();
+
+        setError("");
+        setLoading(true);
+
+        try {
+            const response = await fetch("http://127.0.0.1:8000/auth/register", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    username: username.trim(),
+                    password,
+                    first_name: firstName.trim(),
+                    last_name: lastName.trim(),
+                    email: email.trim() || null,
+                    phone: phone.trim() || null,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                setError(data.detail || "Unable to create your student account.");
+                return;
+            }
+
+            localStorage.removeItem("user");
+            setPassword("");
+            setIsRegistering(false);
+            setNotice("Your account was created. Sign in with your new username and password.");
+            setUsername(data.username);
+        } catch {
+            setError("Unable to connect to the checkout system.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    function switchMode(registering) {
+        setIsRegistering(registering);
+        setError("");
+        setNotice("");
+    }
 
     return (
         <div className="min-h-screen bg-slate-200 flex items-center justify-center p-6">
@@ -125,18 +183,28 @@ function Login() {
                                 </p>
 
                                 <h2 className="mt-2 text-3xl font-black text-slate-900">
-                                    Sign In
+                                    {isRegistering ? "Create Student Account" : "Sign In"}
                                 </h2>
 
                                 <p className="mt-2 text-slate-500">
-                                    Enter your library account credentials.
+                                    {isRegistering
+                                        ? "Create an account to access student checkout."
+                                        : "Enter your library account credentials."}
                                 </p>
                             </div>
 
                             <form
-                                onSubmit={handleLogin}
+                                onSubmit={isRegistering ? handleRegister : handleLogin}
                                 className="space-y-6"
                             >
+                                {notice && (
+                                    <p
+                                        role="status"
+                                        className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800"
+                                    >
+                                        {notice}
+                                    </p>
+                                )}
 
                                 {/* Username */}
                                 <div>
@@ -150,8 +218,11 @@ function Login() {
                                     <input
                                         id="username"
                                         type="text"
+                                        required
+                                        minLength={isRegistering ? 3 : undefined}
+                                        maxLength={50}
                                         autoComplete="username"
-                                        placeholder="Enter username"
+                                        placeholder={isRegistering ? "Choose a username" : "Enter username"}
                                         value={username}
                                         onChange={(event) =>
                                             setUsername(event.target.value)
@@ -178,8 +249,11 @@ function Login() {
                                     <input
                                         id="password"
                                         type="password"
+                                        required
+                                        minLength={isRegistering ? 8 : undefined}
+                                        maxLength={255}
                                         autoComplete="current-password"
-                                        placeholder="Enter password"
+                                        placeholder={isRegistering ? "Create a password (8+ characters)" : "Enter password"}
                                         value={password}
                                         onChange={(event) =>
                                             setPassword(event.target.value)
@@ -193,6 +267,98 @@ function Login() {
                                                    focus:ring-4 focus:ring-blue-100"
                                     />
                                 </div>
+
+                                {isRegistering && (
+                                    <>
+                                    <div>
+                                        <label
+                                            htmlFor="firstName"
+                                            className="block text-sm font-bold text-slate-700 mb-2"
+                                        >
+                                            First name
+                                        </label>
+
+                                        <input
+                                            id="firstName"
+                                            type="text"
+                                            required
+                                            maxLength={100}
+                                            autoComplete="given-name"
+                                            placeholder="Enter your first name"
+                                            value={firstName}
+                                            onChange={(event) => setFirstName(event.target.value)}
+                                            className="w-full h-14 px-4 rounded-xl border-2 border-slate-200
+                                                       bg-slate-50 text-slate-900 placeholder-slate-400
+                                                       outline-none transition focus:border-blue-700
+                                                       focus:bg-white focus:ring-4 focus:ring-blue-100"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label
+                                            htmlFor="lastName"
+                                            className="block text-sm font-bold text-slate-700 mb-2"
+                                        >
+                                            Last name
+                                        </label>
+                                        <input
+                                            id="lastName"
+                                            type="text"
+                                            required
+                                            maxLength={100}
+                                            autoComplete="family-name"
+                                            placeholder="Enter your last name"
+                                            value={lastName}
+                                            onChange={(event) => setLastName(event.target.value)}
+                                            className="w-full h-14 px-4 rounded-xl border-2 border-slate-200
+                                                       bg-slate-50 text-slate-900 placeholder-slate-400
+                                                       outline-none transition focus:border-blue-700
+                                                       focus:bg-white focus:ring-4 focus:ring-blue-100"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label
+                                            htmlFor="email"
+                                            className="block text-sm font-bold text-slate-700 mb-2"
+                                        >
+                                            Email <span className="font-normal text-slate-400">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="email"
+                                            type="email"
+                                            maxLength={254}
+                                            autoComplete="email"
+                                            placeholder="Enter your email"
+                                            value={email}
+                                            onChange={(event) => setEmail(event.target.value)}
+                                            className="w-full h-14 px-4 rounded-xl border-2 border-slate-200
+                                                       bg-slate-50 text-slate-900 placeholder-slate-400
+                                                       outline-none transition focus:border-blue-700
+                                                       focus:bg-white focus:ring-4 focus:ring-blue-100"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label
+                                            htmlFor="phone"
+                                            className="block text-sm font-bold text-slate-700 mb-2"
+                                        >
+                                            Phone <span className="font-normal text-slate-400">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="phone"
+                                            type="tel"
+                                            maxLength={30}
+                                            autoComplete="tel"
+                                            placeholder="Enter your phone number"
+                                            value={phone}
+                                            onChange={(event) => setPhone(event.target.value)}
+                                            className="w-full h-14 px-4 rounded-xl border-2 border-slate-200
+                                                       bg-slate-50 text-slate-900 placeholder-slate-400
+                                                       outline-none transition focus:border-blue-700
+                                                       focus:bg-white focus:ring-4 focus:ring-blue-100"
+                                        />
+                                    </div>
+                                    </>
+                                )}
 
                                 {/* Error */}
                                 {error && (
@@ -209,7 +375,6 @@ function Login() {
                                     </div>
                                 )}
 
-                                {/* Sign In */}
                                 <button
                                     type="submit"
                                     disabled={loading}
@@ -225,10 +390,27 @@ function Login() {
                                                focus:ring-4
                                                focus:ring-red-200"
                                 >
-                                    {loading ? "Signing In..." : "Sign In"}
+                                    {loading
+                                        ? isRegistering
+                                            ? "Creating Account..."
+                                            : "Signing In..."
+                                        : isRegistering
+                                            ? "Create Student Account"
+                                            : "Sign In"}
                                 </button>
 
                             </form>
+
+                            <p className="mt-5 text-center text-sm text-slate-600">
+                                {isRegistering ? "Already have an account?" : "New student?"}{" "}
+                                <button
+                                    type="button"
+                                    onClick={() => switchMode(!isRegistering)}
+                                    className="font-bold text-blue-800 underline hover:text-blue-950"
+                                >
+                                    {isRegistering ? "Sign in" : "Create an account"}
+                                </button>
+                            </p>
 
                             {/* Bottom Information */}
                             <div className="mt-10 border-t border-slate-200 pt-6">
