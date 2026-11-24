@@ -48,7 +48,19 @@ from catalog import (
     get_all_sizes,
     get_product_by_id_with_size,
 )
-from payment import pay_with_cash, pay_with_card, pay_with_voucher, refund_voucher
+from payment import (
+    pay_with_cash,
+    pay_with_card,
+    pay_with_voucher,
+    refund_voucher,
+)
+
+from voucher_payment import (
+    process_voucher_split_payment,
+    verify_voucher_approver,
+)
+
+from cash_drawer import check_cash_drawer, update_minimum_balance
 from receipt import create_order
 from returns import ReturnError, get_order_for_return, process_return
 from staff_activity import log_staff_activity, get_staff_activity
@@ -69,8 +81,37 @@ app.add_middleware(
 
 
 # -------------------------
+# Cash drawer routes
+# -------------------------
+
+@app.get("/cash-drawer/{drawer_id}/status")
+def get_cash_drawer_status(drawer_id: int):
+    """Return the cash drawer balance and low-change warning."""
+
+    result = check_cash_drawer(drawer_id)
+
+    if not result["success"]:
+        if result["message"] == "Cash drawer not found.":
+            raise HTTPException(
+                status_code=404,
+                detail=result["message"]
+            )
+
+        raise HTTPException(
+            status_code=500,
+            detail=result["message"]
+        )
+
+    return result
+
+# -------------------------
 # Request models
 # -------------------------
+
+class CashDrawerThresholdRequest(BaseModel):
+    user_name: str
+    password: str
+    minimum_balance: Decimal = Field(ge=0, decimal_places=2)
 
 class DeleteProductRequest(BaseModel):
     user_name: str
@@ -213,9 +254,19 @@ class CardPaymentRequest(BaseModel):
     approved: bool
     student_id: str | None = None
 
+class VoucherSplitPaymentRequest(BaseModel):
+    voucher_amount: str
+    payment_method: str
+    cash_received: str = "0"
+    card_approved: bool = False
+    student_id: str | None = None
+    manager_username: str
+    manager_password: str
+
 
 class VoucherPaymentRequest(BaseModel):
     student_id: str = Field(..., min_length=1, max_length=20)
+
 
 class ReturnLookupRequest(BaseModel):
     username: str
@@ -233,11 +284,47 @@ class ReturnRequest(BaseModel):
     items: list[ReturnItemRequest] = Field(..., min_length=1, max_length=100)
     reason: str | None = Field(default=None, max_length=500)
 
-
 class CourseProductAssignmentRequest(BaseModel):
     user_name: str
     password: str
     required: bool = False
+
+
+@app.put("/cash-drawer/{drawer_id}/minimum")
+def set_cash_drawer_minimum(
+    drawer_id: int,
+    request: CashDrawerThresholdRequest
+):
+    """Allow managers to update the cash drawer minimum balance."""
+
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can update the cash drawer minimum"
+        )
+
+    result = update_minimum_balance(
+        drawer_id,
+        request.minimum_balance
+    )
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=404
+            if result["message"] == "Cash drawer not found."
+            else 400,
+            detail=result["message"]
+        )
+
+    return result
 
 
 class CourseCreateRequest(BaseModel):
@@ -253,7 +340,6 @@ class SupplyBundleCreateRequest(BaseModel):
     password: str
     bundle_name: str = Field(..., min_length=1, max_length=100)
     product_ids: list[int] = Field(..., min_length=1, max_length=100)
-
 
 # -------------------------
 # Checkout / receipt helpers
@@ -410,8 +496,9 @@ def save_checkout_order(
     user_id: int,
     total: Decimal,
     order_items: list[dict],
-    payment_method: str,
+    payment_method: str = "cash",
     student_id: str | None = None,
+    voucher_payment: dict | None = None,
 ):
     """
     Save the completed checkout as an order.
@@ -432,6 +519,7 @@ def save_checkout_order(
             order_items,
             payment_method=payment_method,
             student_id=(student_id or "").strip() or None,
+            voucher_payment=voucher_payment,
         )
     except Exception as error:
         print(f"Error creating checkout order: {error}")
@@ -855,6 +943,79 @@ def card_checkout(user_id: int, request: CardPaymentRequest):
         "receipt_id": receipt_id,
     }
 
+@app.post("/checkout/{user_id}/voucher-split")
+def voucher_split_checkout(user_id: int, request: VoucherSplitPaymentRequest):
+    # Calculate the final checkout total.
+    checkout = calculate_checkout_totals(
+        user_id,
+        request.student_id
+    )
+
+    total = checkout["total"]
+
+    if total <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Cart total must be greater than zero."
+        )
+
+    # Validate voucher and remaining cash/card payment.
+    payment_result = process_voucher_split_payment(
+        total,
+        request.voucher_amount,
+        request.payment_method,
+        cash_received=request.cash_received,
+        card_approved=request.card_approved
+    )
+
+    if not payment_result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=payment_result["message"]
+        )
+
+    # Require manager approval.
+    approval = verify_voucher_approver(
+        request.manager_username,
+        request.manager_password
+    )
+
+    if not approval["success"]:
+        raise HTTPException(
+            status_code=403,
+            detail=approval["message"]
+        )
+
+    # Record the verified manager's ID, not a client-supplied ID.
+    voucher_payment = {
+        "voucher_amount": payment_result["voucher_amount"],
+        "remaining_amount": payment_result["remaining_amount"],
+        "payment_method": payment_result["payment_method"],
+        "approved_by_staff_id": approval["approved_by_staff_id"]
+    }
+
+    # Save order and voucher record in one transaction.
+    receipt_id = save_checkout_order(
+    user_id,
+    total,
+    checkout["order_items"],
+    payment_method="voucher",
+    student_id=request.student_id,
+    voucher_payment=voucher_payment,
+)
+    return {
+        "message": "Voucher checkout successful.",
+        "subtotal": str(checkout["subtotal"]),
+        "student_discount": str(checkout["student_discount"]),
+        "student_discount_applied": checkout["student_discount_applied"],
+        "total": str(total),
+        "voucher_amount": payment_result["voucher_amount"],
+        "remaining_amount": payment_result["remaining_amount"],
+        "payment_method": payment_result["payment_method"],
+        "change": payment_result["change"],
+        "approved_by_staff_id": approval["approved_by_staff_id"],
+        "receipt_id": receipt_id
+    }
 
 @app.post("/checkout/{user_id}/voucher")
 def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
@@ -2690,17 +2851,17 @@ def remove_product_from_course(
 
         if connection is not None:
             connection.close()
-#gets all available colors 
+#gets all available colors
 @app.get("/colors")
 def get_colors():
     return get_all_colors()
 
-#gets all colors assigned to a product 
+#gets all colors assigned to a product
 @app.get("/products/with-colors")
 def get_product_color():
     return get_all_products_with_color()
 
-#gets a product assigned to a color 
+#gets a product assigned to a color
 @app.get("/products/{product_id}/colors")
 def read_product_by_id_with_color(product_id: int):
     product = get_product_by_id_with_color(product_id)

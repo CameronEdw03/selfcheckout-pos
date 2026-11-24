@@ -3,7 +3,7 @@ from mysql.connector import Error
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 def create_connection():

@@ -1,3 +1,4 @@
+import CashDrawerWarning from "./CashDrawerWarning";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import StaffPriceCorrection from "./StaffPriceCorrection";
@@ -146,7 +147,7 @@ function getCourseLabel(course) {
     "";
 
   if (code && name && String(name) !== String(code)) {
-    return `${code} — ${name}`;
+    return `${code} â€” ${name}`;
   }
 
   return String(
@@ -246,6 +247,10 @@ function ProductCatalog() {
 
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [cashReceived, setCashReceived] = useState("");
+  const [voucherAmount, setVoucherAmount] = useState("");
+  const [voucherPaymentMethod, setVoucherPaymentMethod] = useState("cash");
+  const [managerUsername, setManagerUsername] = useState("");
+  const [managerPassword, setManagerPassword] = useState("");
   const [studentId, setStudentId] = useState("");
   const [receiptPhone, setReceiptPhone] = useState("");
 
@@ -861,7 +866,7 @@ function ProductCatalog() {
       setStaffTransactionLoading(false);
     }
   }
-    
+
 
 
   // Remove one product from the cart.
@@ -1036,6 +1041,10 @@ function ProductCatalog() {
     setCashReceived("");
     setStudentId("");
     setPaymentMethod("cash");
+    setVoucherAmount("");
+    setVoucherPaymentMethod("cash");
+    setManagerUsername("");
+    setManagerPassword("");
     setIsCartOpen(false);
     setIsCheckoutOpen(true);
   }
@@ -1097,8 +1106,8 @@ function ProductCatalog() {
             }),
           }
         );
-      } else if (paymentMethod === "voucher") {
-        if (!enteredStudentId) {
+} else if (paymentMethod === "voucher") {
+  if (!enteredStudentId) {
           throw new Error("Enter your student ID to pay with your voucher.");
         }
 
@@ -1114,7 +1123,7 @@ function ProductCatalog() {
             }),
           }
         );
-      } else {
+      } else if (paymentMethod === "card") {
         response = await fetch(
           `${API}/checkout/${currentUser.user_id}/card`,
           {
@@ -1128,8 +1137,51 @@ function ProductCatalog() {
             }),
           }
         );
-      }
 
+} else if (paymentMethod === "voucher-split") {
+  const amount = Number(voucherAmount);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Enter a valid voucher amount.");
+  }
+
+  if (!managerUsername.trim() || !managerPassword) {
+    throw new Error("Manager approval is required.");
+  }
+
+  if (
+    voucherPaymentMethod === "cash" &&
+    (cashReceived.trim() === "" ||
+      !Number.isFinite(Number(cashReceived)) ||
+      Number(cashReceived) < 0)
+  ) {
+    throw new Error("Enter a valid cash amount.");
+  }
+
+  response = await fetch(
+  `${API}/checkout/${currentUser.user_id}/voucher-split`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...checkoutBody,
+        voucher_amount: amount.toFixed(2),
+        payment_method: voucherPaymentMethod,
+        cash_received:
+          voucherPaymentMethod === "cash"
+            ? Number(cashReceived).toFixed(2)
+            : "0",
+        card_approved: voucherPaymentMethod === "card",
+        manager_username: managerUsername.trim(),
+        manager_password: managerPassword,
+      }),
+    }
+  );
+} else {
+  throw new Error("Invalid payment method.");
+}
       const paymentResponse = await readResponse(response);
 
       setReceipt({
@@ -1147,8 +1199,25 @@ function ProductCatalog() {
           paymentResponse?.cash_received ??
           (paymentMethod === "cash" ? cashReceived : ""),
         change: paymentResponse?.change ?? null,
+        voucherAmount:
+          paymentMethod === "voucher-split"
+            ? Number(paymentResponse?.voucher_amount ?? 0)
+            : null,
+       remainingAmount:
+  paymentMethod === "voucher-split"
+    ? Number(paymentResponse?.remaining_amount ?? 0)
+    : null,
+       remainingPaymentMethod:
+  paymentMethod === "voucher-split"
+    ? paymentResponse?.payment_method
+    : null,
+approvedByStaffId:
+  paymentMethod === "voucher-split"
+    ? paymentResponse?.approved_by_staff_id
+    : null,
         voucherBalance: paymentResponse?.voucher_balance ?? null,
         message:
+
           paymentResponse?.message ?? "Checkout completed successfully.",
       });
 
@@ -1190,7 +1259,26 @@ function ProductCatalog() {
         ? `Student discount: -$${formatMoney(receipt.studentDiscount)}`
         : "",
       `Total: $${formatMoney(receipt.total)}`,
-      `Payment: ${PAYMENT_LABELS[receipt.paymentMethod]}`,
+      `Payment: ${
+        receipt.paymentMethod === "voucher-split" &&
+        receipt.approvedByStaffId != null
+          ? "Voucher + Split Payment"
+          : PAYMENT_LABELS[receipt.paymentMethod] ?? receipt.paymentMethod
+      }`,
+      receipt.voucherAmount != null
+        ? `Voucher Amount: $${formatMoney(receipt.voucherAmount)}`
+        : "",
+      receipt.remainingAmount != null
+        ? `Remaining Amount: $${formatMoney(receipt.remainingAmount)}`
+        : "",
+      receipt.remainingPaymentMethod
+        ? `Remaining Payment Method: ${
+            receipt.remainingPaymentMethod === "cash" ? "Cash" : "Card"
+          }`
+        : "",
+      receipt.approvedByStaffId != null
+        ? `Approved by Staff ID: ${receipt.approvedByStaffId}`
+        : "",
       receipt.voucherBalance != null
         ? `Voucher balance remaining: $${formatMoney(receipt.voucherBalance)}`
         : "",
@@ -1389,7 +1477,7 @@ function ProductCatalog() {
                                   )}
                                   {item.deal_label && (
                                     <p className="mt-1 inline-block rounded bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-800">
-                                      {item.deal_label} · You save $
+                                      {item.deal_label} Â· You save $
                                       {formatMoney(item.deal_savings)}
                                     </p>
                                   )}
@@ -1435,7 +1523,7 @@ function ProductCatalog() {
                                     className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 font-bold text-slate-700 hover:bg-slate-100"
                                     aria-label={`Decrease quantity of ${item.name}`}
                                   >
-                                    −
+                                    âˆ’
                                   </button>
                                   <span className="min-w-6 text-center text-sm font-bold">
                                     {item.quantity}
@@ -1533,6 +1621,8 @@ function ProductCatalog() {
       </header>
 
       <main className="mx-auto max-w-[1600px] px-6 py-8 lg:px-10">
+
+
         {priceDiscountSuccess && (
           <p
             role="status"
@@ -1541,6 +1631,7 @@ function ProductCatalog() {
             {priceDiscountSuccess}
           </p>
         )}
+
 
         <div className="mb-6 rounded-xl bg-blue-950 px-6 py-6 text-white shadow-sm">
           <p className="text-sm font-bold uppercase tracking-wider text-blue-200">
@@ -1579,7 +1670,7 @@ function ProductCatalog() {
               </div>
               <p className="text-sm font-semibold text-slate-600">
                 Active transaction: {cartCount}{" "}
-                {cartCount === 1 ? "item" : "items"} · $
+                {cartCount === 1 ? "item" : "items"} Â· $
                 {formatMoney(cartTotal)}
               </p>
             </div>
@@ -1689,13 +1780,13 @@ function ProductCatalog() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="font-bold text-slate-900">
-                      {staffTransaction.username} · Student ID{" "}
+                      {staffTransaction.username} Â· Student ID{" "}
                       {staffTransaction.student_id}
                     </p>
                     <p className="mt-1 text-sm text-slate-500">
-                      In-progress transaction · {staffTransaction.cart.length}{" "}
+                      In-progress transaction Â· {staffTransaction.cart.length}{" "}
                       {staffTransaction.cart.length === 1 ? "product" : "products"}{" "}
-                      · Total $
+                      Â· Total $
                       {formatMoney(
                         staffTransaction.cart.reduce(
                           (total, item) =>
@@ -1741,7 +1832,7 @@ function ProductCatalog() {
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <p className="font-bold text-slate-900">
-                                {item.name} × {item.quantity}
+                                {item.name} Ã— {item.quantity}
                               </p>
                               <p className="mt-1 text-sm text-slate-600">
                                 Unit price: $
@@ -2060,7 +2151,7 @@ function ProductCatalog() {
                   ? "product"
                   : "products"}
               </p>
-              
+
               <button
               type="button"
               onClick={addCourseBundleToCart}
@@ -2449,7 +2540,7 @@ function ProductCatalog() {
             <div className="bg-blue-950 px-6 py-5 text-white">
               <h2 className="text-xl font-black">Select a Size</h2>
               <p className="mt-1 text-sm text-blue-200">
-                {sizePickerProduct.name} — $
+                {sizePickerProduct.name} â€” $
                 {formatMoney(getProductPrice(sizePickerProduct))}
               </p>
             </div>
@@ -2551,10 +2642,10 @@ function ProductCatalog() {
                       className="flex justify-between gap-3 text-sm text-slate-600"
                     >
                       <span>
-                        {item.name} × {item.quantity}
+                        {item.name} Ã— {item.quantity}
                         {item.deal_label && (
                           <span className="block text-xs font-semibold text-green-700">
-                            {item.deal_label} (−${formatMoney(item.deal_savings)})
+                            {item.deal_label} (âˆ’${formatMoney(item.deal_savings)})
                           </span>
                         )}
                       </span>
@@ -2640,9 +2731,125 @@ function ProductCatalog() {
                       Voucher
                     </button>
                   )}
+{currentUser?.role !== "student" && (
+  <button
+    type="button"
+    onClick={() => setPaymentMethod("voucher-split")}
+    className={`rounded-lg border px-4 py-3 text-sm font-bold ${
+      paymentMethod === "voucher-split"
+        ? "border-blue-900 bg-blue-50 text-blue-950"
+        : "border-slate-200 text-slate-600"
+    }`}
+  >
+    Voucher Split Payment
+  </button>
+)}
                 </div>
               </div>
+{paymentMethod === "voucher-split" && (
+  <div>
+    <label
+      htmlFor="voucherAmount"
+      className="mb-2 block text-sm font-bold text-slate-700"
+    >
+      Voucher Amount ($)
+    </label>
 
+    <input
+      id="voucherAmount"
+      type="number"
+      min="0.01"
+      step="0.01"
+      value={voucherAmount}
+      onChange={(e) => setVoucherAmount(e.target.value)}
+      placeholder="Enter voucher amount"
+      required
+      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+    />
+
+    <div className="mt-4">
+      <label
+        htmlFor="voucherPaymentMethod"
+        className="mb-2 block text-sm font-bold text-slate-700"
+      >
+        Pay Remaining Balance With
+      </label>
+
+      <select
+        id="voucherPaymentMethod"
+        value={voucherPaymentMethod}
+        onChange={(e) => setVoucherPaymentMethod(e.target.value)}
+        className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+      >
+        <option value="cash">Cash</option>
+        <option value="card">Card</option>
+      </select>
+    </div>
+    {voucherPaymentMethod === "cash" && (
+  <div className="mt-4">
+    <label
+      htmlFor="voucherCashReceived"
+      className="mb-2 block text-sm font-bold text-slate-700"
+    >
+      Cash Received for Remaining Balance ($)
+    </label>
+
+    <input
+      id="voucherCashReceived"
+      type="number"
+      min="0"
+      step="0.01"
+      value={cashReceived}
+      onChange={(e) => setCashReceived(e.target.value)}
+      placeholder="Enter cash received"
+      required
+      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+    />
+  </div>
+)}
+  </div>
+)}
+{paymentMethod === "voucher-split" && (
+  <div className="space-y-4">
+    <div>
+      <label
+        htmlFor="managerUsername"
+        className="mb-2 block text-sm font-bold text-slate-700"
+      >
+        Manager Username
+      </label>
+      <input
+        id="managerUsername"
+        type="text"
+        value={managerUsername}
+        onChange={(e) => setManagerUsername(e.target.value)}
+        placeholder="Enter manager username"
+        autoComplete="off"
+        required
+        className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+      />
+    </div>
+
+    <div>
+      <label
+        htmlFor="managerPassword"
+        className="mb-2 block text-sm font-bold text-slate-700"
+      >
+        Manager Password
+      </label>
+      <input
+        id="managerPassword"
+        type="password"
+        value={managerPassword}
+        onChange={(e) => setManagerPassword(e.target.value)}
+        placeholder="Enter manager password"
+        autoComplete="off"
+        required
+        className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm"
+      />
+    </div>
+  </div>
+)}
               {paymentMethod === "cash" && (
                 <div>
                   <label
@@ -2667,7 +2874,7 @@ function ProductCatalog() {
 
               {paymentMethod === "card" && (
                 <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
-                  Card checkout will use the backend’s simulated card approval.
+                  Card checkout will use the backendâ€™s simulated card approval.
                 </p>
               )}
 
@@ -2741,10 +2948,10 @@ function ProductCatalog() {
                     className="flex justify-between gap-3 text-sm"
                   >
                     <span className="text-slate-700">
-                      {item.name} × {item.quantity}
+                      {item.name} Ã— {item.quantity}
                       {item.deal_label && (
                         <span className="block text-xs font-semibold text-green-700">
-                          {item.deal_label} · saved $
+                          {item.deal_label} Â· saved $
                           {formatMoney(item.deal_savings)}
                         </span>
                       )}
@@ -2765,7 +2972,7 @@ function ProductCatalog() {
                 {receipt.studentDiscountApplied && (
                   <div className="flex justify-between text-sm font-semibold text-green-700">
                     <span>Student discount (10% on Books)</span>
-                    <span>−${formatMoney(receipt.studentDiscount)}</span>
+                    <span>âˆ’${formatMoney(receipt.studentDiscount)}</span>
                   </div>
                 )}
 
@@ -2775,8 +2982,40 @@ function ProductCatalog() {
                 </div>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  Payment: {PAYMENT_LABELS[receipt.paymentMethod]}
+                  Payment:{" "}
+                  {receipt.paymentMethod === "voucher" &&
+                  receipt.approvedByStaffId != null
+                    ? "Voucher + Split Payment"
+                    : PAYMENT_LABELS[receipt.paymentMethod] ??
+                      receipt.paymentMethod}
                 </p>
+
+                {receipt.approvedByStaffId != null && (
+                  <div className="mt-3 space-y-1 rounded-lg bg-blue-50 p-3 text-sm text-slate-700">
+                    <p>
+                      Voucher Amount: ${formatMoney(receipt.voucherAmount)}
+                    </p>
+                    <p>
+                      Remaining Amount: ${formatMoney(receipt.remainingAmount)}
+                    </p>
+                    <p>
+                      Remaining Payment Method:{" "}
+                      {receipt.remainingPaymentMethod === "cash"
+                        ? "Cash"
+                        : "Card"}
+                    </p>
+                    <p>
+                      Approved by Staff ID: {receipt.approvedByStaffId}
+                    </p>
+                  </div>
+                )}
+
+                {receipt.voucherBalance != null && (
+                  <p className="mt-2 text-sm text-slate-700">
+                    Voucher balance remaining: $
+                    {formatMoney(receipt.voucherBalance)}
+                  </p>
+                )}
 
                 {receipt.change != null && (
                   <p className="mt-1 text-sm text-slate-500">
@@ -2808,8 +3047,8 @@ function ProductCatalog() {
                   className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-700"
                 />
                 <p className="mt-2 text-xs text-slate-500">
-                  This opens your device’s messaging app with the receipt filled
-                  in. You’ll need to send the text yourself.
+                  This opens your deviceâ€™s messaging app with the receipt filled
+                  in. Youâ€™ll need to send the text yourself.
                 </p>
               </div>
 

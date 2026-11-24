@@ -1,3 +1,5 @@
+import CashDrawerWarning from "./CashDrawerWarning";
+import CashDrawerSettings from "./CashDrawerSettings";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CourseProductAssignment from "../components/CourseProductAssignment";
@@ -440,6 +442,7 @@ function ManagerDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-100">
+      <CashDrawerWarning />
       {/* Dashboard header */}
       <header className="border-b-4 border-red-600 bg-white shadow-sm">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
@@ -484,7 +487,7 @@ function ManagerDashboard() {
             You are signed in with manager access.
           </p>
         </section>
-
+        <CashDrawerSettings currentUser={currentUser} />
         {/* Daily sales analytics */}
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-1">
