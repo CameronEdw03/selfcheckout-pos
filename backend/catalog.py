@@ -335,12 +335,82 @@ def get_all_products():
 
     try:
         cursor = connection.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM products")
+        cursor.execute(
+            """
+            SELECT products.*,
+                   CASE
+                       WHEN sale_price IS NOT NULL
+                        AND CURRENT_DATE BETWEEN sale_start_date AND sale_end_date
+                       THEN sale_price
+                       ELSE NULL
+                   END AS active_sale_price
+            FROM products
+            """
+        )
         return cursor.fetchall()
 
     except Exception as error:
         print(f"Error retrieving products: {error}")
         return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        connection.close()
+
+
+def schedule_product_sale(
+    product_id,
+    sale_price,
+    start_date,
+    end_date,
+):
+    """Schedule or replace a product's fixed sale price and date range."""
+    connection = create_connection()
+
+    if not connection:
+        return "unavailable"
+
+    cursor = None
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT price
+            FROM products
+            WHERE product_id = %s
+            FOR UPDATE
+            """,
+            (product_id,),
+        )
+        product = cursor.fetchone()
+
+        if not product:
+            connection.rollback()
+            return "not_found"
+
+        if sale_price >= Decimal(str(product[0])):
+            connection.rollback()
+            return "sale_price_not_lower"
+
+        cursor.execute(
+            """
+            UPDATE products
+            SET sale_price = %s,
+                sale_start_date = %s,
+                sale_end_date = %s
+            WHERE product_id = %s
+            """,
+            (sale_price, start_date, end_date, product_id),
+        )
+        connection.commit()
+        return "scheduled"
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Error scheduling product sale: {error}")
+        return "unavailable"
 
     finally:
         if cursor:

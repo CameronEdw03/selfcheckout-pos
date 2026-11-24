@@ -11,7 +11,10 @@ CREATE TABLE IF NOT EXISTS products (
     quantity INT NOT NULL DEFAULT 0,
     category VARCHAR(50),
     discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
-    is_tax_exempt BOOLEAN NOT NULL DEFAULT FALSE
+    is_tax_exempt BOOLEAN NOT NULL DEFAULT FALSE,
+    sale_price DECIMAL(10,2) NULL,
+    sale_start_date DATE NULL,
+    sale_end_date DATE NULL
 );
 
 CREATE TABLE IF NOT EXISTS courses (

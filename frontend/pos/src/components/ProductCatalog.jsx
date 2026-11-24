@@ -116,7 +116,12 @@ function normalizeCartResponse(data) {
 }
 
 function getProductPrice(product) {
-  return Number(product?.discounted_price ?? product?.price ?? 0);
+  return Number(
+    product?.discounted_price ??
+      product?.active_sale_price ??
+      product?.price ??
+      0
+  );
 }
 
 function formatMoney(value) {
@@ -495,12 +500,24 @@ function ProductCatalog() {
     [bundles, selectedBundleId]
   );
 
+  const isItemCodeSearch = /^\d+$/.test(search.trim());
   // When a course or bundle is selected, browse only its assigned products.
   const filteredProducts = useMemo(() => {
     const searchValue = search.trim().toLowerCase();
+    const itemCode = search.trim();
+    const normalizedItemCode = itemCode.replace(/^0+(?=\d)/, "");
+    const matchingItem = isItemCodeSearch
+      ? products.find(
+          (product) => String(getProductId(product)) === normalizedItemCode
+        )
+      : null;
 
     const selectedGroup = selectedCourse ?? selectedBundle;
-    const productsToBrowse = selectedGroup
+    const productsToBrowse = isItemCodeSearch
+      ? matchingItem
+        ? [matchingItem]
+        : []
+      : selectedGroup
       ? Array.isArray(selectedGroup.products)
         ? selectedGroup.products
         : []
@@ -528,17 +545,27 @@ function ProductCatalog() {
       })
       .filter((product) => {
         const matchesCategory =
-          category === "All" || product.category === category;
+          isItemCodeSearch ||
+          category === "All" ||
+          product.category === category;
 
         const matchesSearch =
           String(product.product_id ?? "").toLowerCase().includes(searchValue) ||
+          isItemCodeSearch ||
           String(product.name ?? "").toLowerCase().includes(searchValue) ||
           String(product.description ?? "").toLowerCase().includes(searchValue) ||
           String(product.category ?? "").toLowerCase().includes(searchValue);
 
         return matchesCategory && matchesSearch;
       });
-  }, [products, selectedCourse, selectedBundle, category, search]);
+  }, [
+    products,
+    selectedCourse,
+    selectedBundle,
+    category,
+    search,
+    isItemCodeSearch,
+  ]);
 
   // Combine cart data with catalog data so cart lines have product names,
   // categories, prices, quantities, and totals.
@@ -1227,7 +1254,7 @@ function ProductCatalog() {
                 <input
                   type="text"
                   aria-label="Search by item code or name"
-                  placeholder="Search by item code or name"
+                  placeholder="Search by item code, name, or category"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   className="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-700 focus:bg-white"
@@ -2035,13 +2062,15 @@ function ProductCatalog() {
             className="rounded-xl border border-slate-200 bg-white px-6 py-20 text-center shadow-sm"
           >
             <h3 className="text-lg font-bold text-slate-900">
-              {search.trim()
-                ? `No item found for “${search.trim()}”`
-                : "No items found"}
+              {isItemCodeSearch
+                ? `Item code ${search.trim()} not found`
+                : search.trim()
+                  ? `No item found for “${search.trim()}”`
+                  : "No items found"}
             </h3>
             <p className="mt-2 text-sm text-slate-500">
               {search.trim()
-                ? "Check the item code or try a name. Your cart is unchanged, and you can keep shopping."
+                ? "Your cart has not changed. Clear the search to keep shopping."
                 : selectedCourse
                 ? "This course has no assigned products matching your search or category. Try clearing your search, choosing another category, or selecting a different course."
                 : selectedBundle
@@ -2113,6 +2142,12 @@ function ProductCatalog() {
                         Out of Stock
                       </div>
                     )}
+
+                    {product.active_sale_price != null && (
+                      <div className="absolute left-3 bottom-3 rounded-md bg-green-700 px-3 py-1 text-xs font-bold text-white">
+                        On Sale
+                      </div>
+                    )}
                   </div>
 
                   <div className="p-5">
@@ -2123,6 +2158,10 @@ function ProductCatalog() {
                     <h3 className="min-h-6 text-lg font-black text-slate-900">
                       {product.name}
                     </h3>
+
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      Item code: {productId}
+                    </p>
 
                     <p className="mt-2 min-h-10 text-sm leading-5 text-slate-500">
                       {product.description}
@@ -2176,8 +2215,21 @@ function ProductCatalog() {
                     )}
 
                     <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
-                      <span className="text-xl font-black text-blue-950">
-                        ${formatMoney(getProductPrice(product))}
+                      <span className="flex flex-col text-xl font-black text-blue-950">
+                        {product.active_sale_price != null && (
+                          <span className="text-xs font-semibold text-slate-400 line-through">
+                            ${formatMoney(product.price)}
+                          </span>
+                        )}
+                        <span
+                          className={
+                            product.active_sale_price != null
+                              ? "text-red-700"
+                              : ""
+                          }
+                        >
+                          ${formatMoney(getProductPrice(product))}
+                        </span>
                       </span>
 
                       <button

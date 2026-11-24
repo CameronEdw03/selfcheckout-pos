@@ -132,6 +132,10 @@ Managers can also create named supply bundles, such as an ARTS 1311 kit, by choo
 
 Managers can view a daily report with completed transaction count, total revenue, and category-level sales revenue and units sold.
 
+### Scheduled Product Sales
+
+Managers can set a fixed sale price and inclusive start and end dates for a product. The sale price is used automatically during the scheduled date range, and the regular price returns afterward. Apply database migration `010_add_scheduled_product_sales.sql` to existing installations.
+
 ### Shopping Cart
 
 Users can currently:

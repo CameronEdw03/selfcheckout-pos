@@ -31,6 +31,7 @@ from catalog import (
     apply_low_stock_discount,
     update_product_discount_price,
     get_product_price_history,
+    schedule_product_sale,
     remove_product,
     get_all_courses_with_products,  
     get_all_products_with_color,
@@ -100,6 +101,14 @@ class ProductPriceDiscountRequest(BaseModel):
     password: str
     new_price: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class ProductSaleRequest(BaseModel):
+    user_name: str
+    password: str
+    sale_price: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
+    start_date: date
+    end_date: date
 
 
 class ProductRequest(BaseModel):
@@ -1473,6 +1482,56 @@ def discount_product_price(
         "message": "Product price discounted successfully",
         **prices,
     }
+
+
+@app.put("/products/{product_id}/sale")
+def schedule_sale(product_id: int, request: ProductSaleRequest):
+    manager = get_user(request.user_name)
+
+    if not manager or manager["password"] != request.password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+        )
+
+    if manager["role"] != "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers can schedule product sales",
+        )
+
+    if request.end_date < request.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="The sale end date must be on or after the start date",
+        )
+
+    result = schedule_product_sale(
+        product_id,
+        request.sale_price,
+        request.start_date,
+        request.end_date,
+    )
+
+    if result == "not_found":
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        )
+
+    if result == "sale_price_not_lower":
+        raise HTTPException(
+            status_code=422,
+            detail="The sale price must be lower than the regular price",
+        )
+
+    if result != "scheduled":
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to schedule the product sale",
+        )
+
+    return {"message": "Product sale scheduled successfully"}
 
 
 @app.post("/products/price-history")

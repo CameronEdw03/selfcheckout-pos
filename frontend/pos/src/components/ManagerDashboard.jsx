@@ -298,6 +298,16 @@ function ManagerDashboard() {
       category: product.category,
       password: "",
       reason: "",
+      salePrice:
+        product.sale_price == null ? "" : String(product.sale_price),
+      saleStartDate:
+        product.sale_start_date == null
+          ? getLocalDate()
+          : String(product.sale_start_date).slice(0, 10),
+      saleEndDate:
+        product.sale_end_date == null
+          ? getLocalDate()
+          : String(product.sale_end_date).slice(0, 10),
     });
 
     setProductActionError("");
@@ -326,6 +336,7 @@ function ManagerDashboard() {
     const isApplyingDiscount = activeProductAction === "discount";
     const isApplyingPriceDiscount =
       activeProductAction === "price-discount";
+    const isSchedulingSale = activeProductAction === "sale";
     const productId = productActionForm.product_id;
 
     try {
@@ -333,16 +344,19 @@ function ManagerDashboard() {
         `${API}/products/${productId}${
           isApplyingPriceDiscount
             ? "/price-discount"
-            : isApplyingDiscount
-              ? "/discount"
-              : ""
+            : isSchedulingSale
+              ? "/sale"
+              : isApplyingDiscount
+                ? "/discount"
+                : ""
         }`,
         {
-          method: isUpdating
-            ? "PUT"
-            : isApplyingDiscount || isApplyingPriceDiscount
-              ? "POST"
-              : "DELETE",
+          method:
+            isUpdating || isSchedulingSale
+              ? "PUT"
+              : isApplyingDiscount || isApplyingPriceDiscount
+                ? "POST"
+                : "DELETE",
           headers: {
             "Content-Type": "application/json",
           },
@@ -354,6 +368,14 @@ function ManagerDashboard() {
                   new_price: Number(productActionForm.price),
                   reason: productActionForm.reason.trim(),
                 }
+              : isSchedulingSale
+                ? {
+                    user_name: currentUser.username ?? currentUser.user_name,
+                    password: productActionForm.password,
+                    sale_price: Number(productActionForm.salePrice),
+                    start_date: productActionForm.saleStartDate,
+                    end_date: productActionForm.saleEndDate,
+                  }
               : isApplyingDiscount
                 ? {
                     user_name: currentUser.username ?? currentUser.user_name,
@@ -390,9 +412,11 @@ function ManagerDashboard() {
                   ? "restock"
                   : isApplyingPriceDiscount
                     ? "discount"
+                  : isSchedulingSale
+                    ? "schedule sale for"
                   : isApplyingDiscount
-                    ? "discount"
-                    : "remove"
+                  ? "discount"
+                  : "remove"
             } product.`
         );
       }
@@ -406,6 +430,10 @@ function ManagerDashboard() {
               ? `${productActionForm.name} price updated from $${Number(
                   data.old_price
                 ).toFixed(2)} to $${Number(data.new_price).toFixed(2)}.`
+            : isSchedulingSale
+              ? `Sale scheduled for ${productActionForm.name} at $${Number(
+                  productActionForm.salePrice
+                ).toFixed(2)} from ${productActionForm.saleStartDate} through ${productActionForm.saleEndDate}.`
             : isApplyingDiscount
               ? "5% discount applied successfully."
               : "Product removed successfully."
@@ -989,7 +1017,19 @@ function ManagerDashboard() {
                       </td>
 
                       <td className="whitespace-nowrap px-6 py-4 text-right font-semibold text-blue-950">
-                        {Number(product.discount_percent) > 0 ? (
+                        {product.active_sale_price != null ? (
+                          <span className="flex flex-col items-end">
+                            <span className="text-xs text-slate-400 line-through">
+                              ${Number(product.price).toFixed(2)}
+                            </span>
+                            <span>
+                              ${Number(product.active_sale_price).toFixed(2)}
+                            </span>
+                            <span className="text-xs font-bold text-red-700">
+                              Sale active
+                            </span>
+                          </span>
+                        ) : Number(product.discount_percent) > 0 ? (
                           <span className="flex flex-col items-end">
                             <span className="text-xs text-slate-400 line-through">
                               ${Number(product.price).toFixed(2)}
@@ -1010,6 +1050,14 @@ function ManagerDashboard() {
                         ) : (
                           `$${Number(product.price).toFixed(2)}`
                         )}
+                        {product.sale_price != null &&
+                          product.active_sale_price == null && (
+                            <span className="mt-1 block text-xs font-semibold text-purple-700">
+                              Sale: ${Number(product.sale_price).toFixed(2)}{" "}
+                              ({String(product.sale_start_date).slice(0, 10)} –{" "}
+                              {String(product.sale_end_date).slice(0, 10)})
+                            </span>
+                          )}
                       </td>
 
                       <td className="whitespace-nowrap px-6 py-4 text-right font-semibold text-slate-700">
@@ -1035,6 +1083,17 @@ function ManagerDashboard() {
                             className="rounded-md border border-purple-200 px-3 py-1.5 text-xs font-bold text-purple-800 transition hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             Discount Price
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => startProductAction("sale", product)}
+                            disabled={Number(product.price) <= 0}
+                            className="rounded-md border border-purple-200 px-3 py-1.5 text-xs font-bold text-purple-800 transition hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {product.sale_price == null
+                              ? "Schedule Sale"
+                              : "Edit Sale"}
                           </button>
 
                           {Number(product.quantity) < 5 && (
@@ -1200,6 +1259,8 @@ function ManagerDashboard() {
                   ? "Update Product"
                   : activeProductAction === "restock"
                     ? "Restock Product"
+                    : activeProductAction === "sale"
+                      ? "Schedule Product Sale"
                     : activeProductAction === "price-discount"
                       ? "Discount Product Price"
                     : activeProductAction === "discount"
@@ -1349,6 +1410,95 @@ function ManagerDashboard() {
                         : activeProductAction === "restock"
                           ? "Restock Product"
                           : "Save Changes"}
+                    </button>
+                  </div>
+                </form>
+              ) : activeProductAction === "sale" ? (
+                <form
+                  onSubmit={handleProductAction}
+                  className="mt-5 space-y-4"
+                >
+                  <p className="text-sm text-slate-600">
+                    Set a fixed sale price for {productActionForm.name}. The
+                    regular price applies automatically outside these inclusive
+                    dates.
+                  </p>
+
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Sale price
+                    <input
+                      required
+                      type="number"
+                      min="0"
+                      max={Math.max(
+                        0,
+                        productActionForm.currentPrice - 0.01
+                      ).toFixed(2)}
+                      step="0.01"
+                      name="salePrice"
+                      value={productActionForm.salePrice}
+                      onChange={handleProductActionFieldChange}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                    />
+                  </label>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block text-sm font-semibold text-slate-700">
+                      Start date
+                      <input
+                        required
+                        type="date"
+                        name="saleStartDate"
+                        value={productActionForm.saleStartDate}
+                        onChange={handleProductActionFieldChange}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                      />
+                    </label>
+
+                    <label className="block text-sm font-semibold text-slate-700">
+                      End date
+                      <input
+                        required
+                        type="date"
+                        min={productActionForm.saleStartDate}
+                        name="saleEndDate"
+                        value={productActionForm.saleEndDate}
+                        onChange={handleProductActionFieldChange}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                      />
+                    </label>
+                  </div>
+
+                  <ProductActionPasswordInput
+                    value={productActionForm.password}
+                    onChange={handleProductActionFieldChange}
+                  />
+
+                  {productActionError && (
+                    <p role="alert" className="text-sm font-semibold text-red-700">
+                      {productActionError}
+                    </p>
+                  )}
+
+                  <div className="flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveProductAction(null);
+                        setProductActionForm(null);
+                        setProductActionError("");
+                      }}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={savingProductAction}
+                      className="rounded-lg bg-purple-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+                    >
+                      {savingProductAction ? "Scheduling..." : "Schedule Sale"}
                     </button>
                   </div>
                 </form>

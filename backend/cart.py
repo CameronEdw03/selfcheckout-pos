@@ -20,6 +20,13 @@ def set_cart_item_discount(user_id, product_id, new_price, reason, changed_by):
                 c.cart_item_id,
                 p.name,
                 p.price,
+                p.sale_price,
+                CASE
+                    WHEN p.sale_price IS NOT NULL
+                     AND CURRENT_DATE BETWEEN p.sale_start_date AND p.sale_end_date
+                    THEN 1
+                    ELSE 0
+                END AS sale_is_active,
                 c.discounted_price
             FROM cart_items AS c
             JOIN products AS p ON p.product_id = c.product_id
@@ -37,8 +44,15 @@ def set_cart_item_discount(user_id, product_id, new_price, reason, changed_by):
         current_price = (
             item["discounted_price"]
             if item["discounted_price"] is not None
+            else item["sale_price"]
+            if item["sale_is_active"]
             else item["price"]
         )
+        if item["sale_is_active"]:
+            current_price = min(
+                Decimal(str(current_price)),
+                Decimal(str(item["sale_price"])),
+            )
         previous_price = Decimal(str(current_price)).quantize(
             Decimal("0.01"),
             rounding=ROUND_HALF_UP,
@@ -321,12 +335,24 @@ def get_cart(user_id):
                 p.name,
                 p.description,
                 p.price,
-                COALESCE(c.discounted_price, p.price) AS discounted_price,
+                CASE
+                    WHEN p.sale_price IS NOT NULL
+                     AND CURRENT_DATE BETWEEN p.sale_start_date AND p.sale_end_date
+                    THEN LEAST(COALESCE(c.discounted_price, p.sale_price), p.sale_price)
+                    ELSE COALESCE(c.discounted_price, p.price)
+                END AS discounted_price,
                 c.discount_reason,
                 c.discounted_by,
                 p.category,
-                ROUND(COALESCE(c.discounted_price, p.price) * c.quantity, 2)
-                    AS line_total
+                ROUND(
+                    CASE
+                        WHEN p.sale_price IS NOT NULL
+                         AND CURRENT_DATE BETWEEN p.sale_start_date AND p.sale_end_date
+                        THEN LEAST(COALESCE(c.discounted_price, p.sale_price), p.sale_price)
+                        ELSE COALESCE(c.discounted_price, p.price)
+                    END * c.quantity,
+                    2
+                ) AS line_total
             FROM cart_items AS c
             JOIN products AS p
                 ON c.product_id = p.product_id
