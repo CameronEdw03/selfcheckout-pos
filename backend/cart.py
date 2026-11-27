@@ -300,10 +300,14 @@ def update_cart_quantity(user_id, product_id, quantity):
         connection.close()
 
 
-def get_cart(user_id):
+def get_cart(user_id, connection=None, lock_cart=False):
     """Return cart products with unit-price and line-total information."""
 
-    connection = create_connection()
+    owns_connection = connection is None
+
+    if owns_connection:
+        connection = create_connection()
+
     if not connection:
         return []
 
@@ -333,7 +337,7 @@ def get_cart(user_id):
                 ON c.product_id = p.product_id
             WHERE c.user_id = %s
             ORDER BY c.cart_item_id
-            """,
+            """ + (" FOR UPDATE" if lock_cart else ""),
             (user_id,)
         )
 
@@ -347,7 +351,9 @@ def get_cart(user_id):
     finally:
         if cursor is not None:
             cursor.close()
-        connection.close()
+
+        if owns_connection:
+            connection.close()
 
 
 def get_cart_total(user_id):

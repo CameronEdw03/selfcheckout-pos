@@ -106,6 +106,13 @@ CREATE TABLE IF NOT EXISTS student_vouchers (
     CHECK (balance >= 0)
 );
 
+CREATE TABLE IF NOT EXISTS campus_cards (
+    student_id VARCHAR(20) PRIMARY KEY,
+    balance DECIMAL(10,2) NOT NULL DEFAULT 0,
+    FOREIGN KEY (student_id) REFERENCES users(student_id),
+    CHECK (balance >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS cart_items (
     cart_item_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,

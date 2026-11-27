@@ -217,3 +217,74 @@ def refund_voucher(student_id, amount):
         if cursor is not None:
             cursor.close()
         connection.close()
+
+def pay_with_campus_card(student_id, total, connection):
+    """Deduct the checkout total from a campus card balance."""
+
+    try:
+        total = Decimal(str(total))
+
+        if not total.is_finite() or total <= 0:
+            return {
+                "success": False,
+                "message": "Invalid payment amount."
+            }
+
+        if total != total.quantize(Decimal("0.01")):
+            return {
+                "success": False,
+                "message": "Invalid payment amount."
+            }
+
+    except (InvalidOperation, ValueError):
+        return {
+            "success": False,
+            "message": "Invalid payment amount."
+        }
+
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            """
+            SELECT balance
+            FROM campus_cards
+            WHERE student_id = %s
+            FOR UPDATE
+            """,
+            (student_id,)
+        )
+
+        card = cursor.fetchone()
+
+        if card is None:
+            return {
+                "success": False,
+                "message": "Campus card not found."
+            }
+
+        balance = Decimal(str(card[0]))
+
+        if balance < total:
+            return {
+                "success": False,
+                "message": "Insufficient campus card balance."
+            }
+
+        cursor.execute(
+            """
+            UPDATE campus_cards
+            SET balance = balance - %s
+            WHERE student_id = %s
+            """,
+            (total, student_id)
+        )
+
+        return {
+            "success": True,
+            "message": "Campus card payment approved.",
+            "remaining_balance": balance - total
+        }
+
+    finally:
+        cursor.close()

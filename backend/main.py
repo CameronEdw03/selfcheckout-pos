@@ -40,7 +40,7 @@ from catalog import (
     update_product_discount_price,
     get_product_price_history,
     remove_product,
-    get_all_courses_with_products,  
+    get_all_courses_with_products,
     get_all_products_with_color,
     get_all_colors,
     get_product_by_id_with_color,
@@ -61,7 +61,7 @@ from voucher_payment import (
 )
 
 from cash_drawer import check_cash_drawer, update_minimum_balance
-from receipt import create_order
+from receipt import create_order, CampusCardPaymentError
 from returns import ReturnError, get_order_for_return, process_return
 from staff_activity import log_staff_activity, get_staff_activity
 
@@ -266,6 +266,10 @@ class VoucherSplitPaymentRequest(BaseModel):
 
 class VoucherPaymentRequest(BaseModel):
     student_id: str = Field(..., min_length=1, max_length=20)
+class CampusCardPaymentRequest(BaseModel):
+    student_id: str = Field(..., min_length=1, max_length=20)
+    username: str
+    password: str
 
 
 class ReturnLookupRequest(BaseModel):
@@ -345,7 +349,12 @@ class SupplyBundleCreateRequest(BaseModel):
 # Checkout / receipt helpers
 # -------------------------
 
-def calculate_checkout_totals(user_id: int, student_id: str | None = None):
+def calculate_checkout_totals(
+    user_id: int,
+    student_id: str | None = None,
+    connection=None,
+    lock_cart=False
+):
     """
     Calculate the checkout subtotal and final total.
 
@@ -355,7 +364,11 @@ def calculate_checkout_totals(user_id: int, student_id: str | None = None):
     Returns the subtotal, student discount, final total, and order items
     with the final unit prices that should be saved to the order.
     """
-    cart_items = get_cart(user_id)
+    cart_items = get_cart(
+        user_id,
+        connection=connection,
+        lock_cart=lock_cart
+    )
 
     if not cart_items:
         raise HTTPException(
@@ -521,6 +534,11 @@ def save_checkout_order(
             student_id=(student_id or "").strip() or None,
             voucher_payment=voucher_payment,
         )
+    except CampusCardPaymentError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
     except Exception as error:
         print(f"Error creating checkout order: {error}")
         raise HTTPException(
@@ -534,11 +552,11 @@ def save_checkout_order(
             detail="Payment succeeded, but the order could not be saved.",
         )
 
-    # Clear the cart only after create_order succeeds.
-    clear_cart(user_id)
+    # Campus Card checkout clears the cart inside its transaction.
+    if payment_method != "campus_card":
+        clear_cart(user_id)
 
     return receipt_id
-
 
 # -------------------------
 # Login and user routes
@@ -1082,7 +1100,92 @@ def voucher_checkout(user_id: int, request: VoucherPaymentRequest):
         "receipt_id": receipt_id,
     }
 
+@app.post("/checkout/{user_id}/campus-card")
+def campus_card_checkout(
+    user_id: int,
+    request: CampusCardPaymentRequest
+):
+    student_id = request.student_id.strip()
 
+    customer = _verify_returning_customer(
+        request.username,
+        request.password
+    )
+
+    if (
+        int(customer["user_id"]) != user_id
+        or customer["role"] != "student"
+        or customer["student_id"] != student_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only use your own campus card."
+        )
+
+    connection = create_connection()
+
+    if not connection:
+        raise HTTPException(
+            status_code=500,
+            detail="Database connection failed."
+        )
+
+    try:
+        checkout = calculate_checkout_totals(
+            user_id,
+            student_id,
+            connection=connection,
+            lock_cart=True
+        )
+
+        total = checkout["total"]
+
+        if total <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cart total must be greater than zero."
+            )
+
+        receipt_id = create_order(
+            user_id,
+            total,
+            checkout["order_items"],
+            payment_method="campus_card",
+            student_id=student_id,
+            connection=connection
+        )
+
+        return {
+            "message": "Campus card payment successful.",
+            "subtotal": str(checkout["subtotal"]),
+            "student_discount": str(checkout["student_discount"]),
+            "student_discount_applied": checkout["student_discount_applied"],
+            "total": str(total),
+            "payment_method": "campus_card",
+            "receipt_id": receipt_id
+        }
+
+    except CampusCardPaymentError as error:
+        connection.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    except HTTPException:
+        connection.rollback()
+        raise
+
+    except Exception as error:
+        connection.rollback()
+        print(f"Campus card checkout error: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail="Campus card checkout could not be completed."
+        )
+
+    finally:
+        connection.close()
 # -------------------------
 # Return routes
 # -------------------------

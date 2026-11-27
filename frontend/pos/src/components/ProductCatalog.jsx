@@ -129,6 +129,7 @@ const PAYMENT_LABELS = {
   cash: "Cash",
   card: "Card",
   voucher: "Student Voucher",
+  campus_card: "Campus Card",
 };
 
 function getCourseLabel(course) {
@@ -246,6 +247,7 @@ function ProductCatalog() {
   const [checkoutError, setCheckoutError] = useState("");
 
   const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [campusCardPassword, setCampusCardPassword] = useState("");
   const [cashReceived, setCashReceived] = useState("");
   const [voucherAmount, setVoucherAmount] = useState("");
   const [voucherPaymentMethod, setVoucherPaymentMethod] = useState("cash");
@@ -1041,6 +1043,7 @@ function ProductCatalog() {
     setCashReceived("");
     setStudentId("");
     setPaymentMethod("cash");
+    setCampusCardPassword("");
     setVoucherAmount("");
     setVoucherPaymentMethod("cash");
     setManagerUsername("");
@@ -1052,6 +1055,7 @@ function ProductCatalog() {
   // Submit checkout to the FastAPI backend.
   async function completeCheckout(event) {
     event.preventDefault();
+    if (checkoutLoading) return;
 
     if (!currentUser?.user_id || cartLines.length === 0) {
       setCheckoutError("Your cart is empty.");
@@ -1120,6 +1124,25 @@ function ProductCatalog() {
             },
             body: JSON.stringify({
               student_id: enteredStudentId,
+            }),
+          }
+        );
+      } else if (paymentMethod === "campus_card") {
+        if (currentUser.role !== "student" || !currentUser.username) {
+          throw new Error("Sign in as a student to use Campus Card.");
+        }
+        if (!enteredStudentId || !campusCardPassword) {
+          throw new Error("Enter your student ID and account password.");
+        }
+        response = await fetch(
+          `${API}/checkout/${currentUser.user_id}/campus-card`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              student_id: enteredStudentId,
+              username: currentUser.username,
+              password: campusCardPassword,
             }),
           }
         );
@@ -1221,13 +1244,19 @@ approvedByStaffId:
           paymentResponse?.message ?? "Checkout completed successfully.",
       });
 
-      await refreshCart();
+      if (paymentMethod === "campus_card") {
+        setCartItems([]);
+        await refreshCart().catch(() => {});
+      } else {
+        await refreshCart();
+      }
 
       setIsCheckoutOpen(false);
       setIsReceiptOpen(true);
     } catch (err) {
       setCheckoutError(err.message || "Checkout failed. Please try again.");
     } finally {
+      setCampusCardPassword("");
       setCheckoutLoading(false);
     }
   }
@@ -2671,7 +2700,7 @@ approvedByStaffId:
                   className="mb-2 block text-sm font-bold text-slate-700"
                 >
                   Student ID{" "}
-                  {paymentMethod === "voucher" ? "(required)" : "(optional)"}
+                  {["voucher", "campus_card"].includes(paymentMethod) ? "(required)" : "(optional)"}
                 </label>
                 <input
                   id="studentId"
@@ -2680,7 +2709,7 @@ approvedByStaffId:
                   onChange={(event) => setStudentId(event.target.value)}
                   placeholder="Enter your student ID (e.g. S10001)"
                   autoComplete="off"
-                  required={paymentMethod === "voucher"}
+                  required={["voucher", "campus_card"].includes(paymentMethod)}
                   className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-700"
                 />
               </div>
@@ -2692,13 +2721,14 @@ approvedByStaffId:
                 <div
                   className={`grid gap-3 ${
                     currentUser?.role === "student"
-                      ? "grid-cols-3"
+                      ? "grid-cols-2"
                       : "grid-cols-2"
                   }`}
                 >
                   <button
                     type="button"
-                    onClick={() => setPaymentMethod("cash")}
+                    disabled={checkoutLoading}
+                    onClick={() => { setCampusCardPassword(""); setPaymentMethod("cash"); }}
                     className={`rounded-lg border px-4 py-3 text-sm font-bold ${
                       paymentMethod === "cash"
                         ? "border-blue-900 bg-blue-50 text-blue-950"
@@ -2709,7 +2739,8 @@ approvedByStaffId:
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPaymentMethod("card")}
+                    disabled={checkoutLoading}
+                    onClick={() => { setCampusCardPassword(""); setPaymentMethod("card"); }}
                     className={`rounded-lg border px-4 py-3 text-sm font-bold ${
                       paymentMethod === "card"
                         ? "border-blue-900 bg-blue-50 text-blue-950"
@@ -2721,7 +2752,8 @@ approvedByStaffId:
                   {currentUser?.role === "student" && (
                     <button
                       type="button"
-                      onClick={() => setPaymentMethod("voucher")}
+                      disabled={checkoutLoading}
+                    onClick={() => { setCampusCardPassword(""); setPaymentMethod("voucher"); }}
                       className={`rounded-lg border px-4 py-3 text-sm font-bold ${
                         paymentMethod === "voucher"
                           ? "border-blue-900 bg-blue-50 text-blue-950"
@@ -2731,10 +2763,30 @@ approvedByStaffId:
                       Voucher
                     </button>
                   )}
+                  {currentUser?.role === "student" && (
+                    <button
+                      type="button"
+                      disabled={checkoutLoading}
+                      onClick={() => {
+                        setPaymentMethod("campus_card");
+                        setStudentId(currentUser.student_id ?? studentId);
+                        setCampusCardPassword("");
+                        setCheckoutError("");
+                      }}
+                      className={`rounded-lg border px-4 py-3 text-sm font-bold ${
+                        paymentMethod === "campus_card"
+                          ? "border-blue-900 bg-blue-50 text-blue-950"
+                          : "border-slate-200 text-slate-600"
+                      }`}
+                    >
+                      Campus Card
+                    </button>
+                  )}
 {currentUser?.role !== "student" && (
   <button
     type="button"
-    onClick={() => setPaymentMethod("voucher-split")}
+    disabled={checkoutLoading}
+                    onClick={() => { setCampusCardPassword(""); setPaymentMethod("voucher-split"); }}
     className={`rounded-lg border px-4 py-3 text-sm font-bold ${
       paymentMethod === "voucher-split"
         ? "border-blue-900 bg-blue-50 text-blue-950"
@@ -2872,6 +2924,26 @@ approvedByStaffId:
                 </div>
               )}
 
+              {paymentMethod === "campus_card" && (
+                <div>
+                  <p className="mb-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">
+                    Your total will be deducted from your simulated Campus Card balance.
+                  </p>
+                  <label htmlFor="campusCardPassword" className="mb-2 block text-sm font-bold text-slate-700">
+                    Confirm your account password
+                  </label>
+                  <input
+                    id="campusCardPassword"
+                    type="password"
+                    autoComplete="current-password"
+                    value={campusCardPassword}
+                    onChange={(event) => setCampusCardPassword(event.target.value)}
+                    disabled={checkoutLoading}
+                    required
+                    className="w-full rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-blue-700"
+                  />
+                </div>
+              )}
               {paymentMethod === "card" && (
                 <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
                   Card checkout will use the backendâ€™s simulated card approval.
@@ -2894,7 +2966,10 @@ approvedByStaffId:
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setIsCheckoutOpen(false)}
+                  onClick={() => {
+                    setCampusCardPassword("");
+                    setIsCheckoutOpen(false);
+                  }}
                   disabled={checkoutLoading}
                   className="flex-1 rounded-lg border border-slate-300 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
                 >
